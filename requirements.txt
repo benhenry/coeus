@@ -1,0 +1,33 @@
+# Coeus Dependencies
+
+# LLM
+anthropic>=0.39.0
+
+# Graph Database
+neo4j>=5.14.0
+
+# Configuration
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# Utilities
+numpy>=1.24.0          # For similarity calculations
+tiktoken>=0.5.0        # Token counting
+python-dateutil>=2.8.2 # Date handling
+
+# Web tools
+requests>=2.31.0       # HTTP client for web fetch
+tavily-python>=0.3.0   # Web search API
+beautifulsoup4>=4.12.0 # HTML parsing
+
+# Logging and monitoring
+structlog>=23.2.0      # Structured logging
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.23.0
+
+# Optional: for visualization
+# networkx>=3.2.1
+# matplotlib>=3.8.0

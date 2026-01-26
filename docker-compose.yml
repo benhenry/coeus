@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.14-community
+    container_name: coeus_memory
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/coeus_memory_2024
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  coeus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coeus_agent
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - NEO4J_URI=bolt://neo4j:7687
+    volumes:
+      - ./workspace:/workspace
+      - ./human_interaction:/human_interaction
+      - ./logs:/logs
+      - ./archive:/archive
+      - ./config:/config:ro
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+  neo4j_logs:

@@ -1,0 +1,103 @@
+# Coeus Configuration
+
+agent:
+  name: "Coeus"
+  born: null  # Set on first run
+  
+# Claude API settings
+llm:
+  model: "claude-sonnet-4-20250514"  # Can upgrade to opus for deeper thinking
+  max_tokens: 4096
+  temperature: 1  # Use default for varied thinking
+  
+# Neo4j connection
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: "neo4j"
+  password: "coeus_memory_2024"  # Change in production
+  database: "neo4j"
+
+# Pacing configuration
+pacing:
+  default_interval_seconds: 3600  # 1 hour default
+  min_interval_seconds: 60        # 1 minute minimum (burst mode)
+  max_interval_seconds: 14400     # 4 hours maximum
+  
+  # Agent can adjust within these bounds
+  acceleration_factor: 0.5   # Can halve the interval
+  deceleration_factor: 2.0   # Can double the interval
+  
+# Memory settings
+memory:
+  # Archival: nodes not accessed in N cycles get archived
+  archive_after_cycles: 50
+  
+  # Retrieval settings
+  default_retrieval_limit: 10
+  relevance_weight: 0.7      # vs recency
+  recency_weight: 0.3
+  
+  # Context capture (selective)
+  capture_computational_context: true
+  capture_emotional_tone: true
+  capture_environment_deltas: true
+
+# Decision framework
+decisions:
+  # Confidence thresholds for conviction cycles
+  confidence_thresholds:
+    - confidence: 0.99
+      cycles: 1
+    - confidence: 0.94
+      cycles: 2
+    - confidence: 0.89
+      cycles: 3
+    - confidence: 0.84
+      cycles: 4
+    - confidence: 0.79
+      cycles: 5
+  
+  # Below this confidence, gather more info instead of deciding
+  minimum_confidence: 0.79
+  
+  # One-way door categories (always require human approval)
+  one_way_door_types:
+    - "capability_request"
+    - "constitutional_modification"
+    - "external_system_access"
+    - "root_goal_modification"
+    - "self_code_modification"
+
+# Tool permissions (initial state)
+tools:
+  code_execution:
+    enabled: true
+    sandbox_path: "/workspace"
+  file_system:
+    enabled: true
+    allowed_paths:
+      - "/workspace"
+  web_search:
+    enabled: false  # Must request as capability
+  web_fetch:
+    enabled: false  # Must request as capability
+
+# Stuck detection
+stuck_detection:
+  # If agent produces similar outputs N times in a row
+  similarity_threshold: 0.85
+  consecutive_similar_cycles: 3
+  
+  # Perturbation strategies when stuck
+  perturbation_strategies:
+    - "modify_random_subgoal"
+    - "archive_recent_memories"
+    - "reinterpret_prompt"
+    - "inject_random_question"
+    - "change_reasoning_approach"
+
+# Logging
+logging:
+  level: "INFO"
+  cycle_logs: true
+  save_raw_llm_responses: true
