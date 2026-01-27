@@ -613,33 +613,87 @@ ACTION: execute_python | code=print("hello world")
         """Parse structured ACTION: lines from the INTENDED_ACTIONS section."""
         actions = []
         # Find the INTENDED_ACTIONS section
+        # Section boundary: **ALL_CAPS** or ## ALL_CAPS (require 2+ uppercase chars
+        # to avoid matching user content like "# My Title")
         section_match = re.search(
-            r'(?:\*\*INTENDED_ACTIONS\*\*|#{1,3}\s*INTENDED_ACTIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
-            content, re.DOTALL | re.IGNORECASE
+            r'(?:\*\*INTENDED_ACTIONS\*\*|#{1,3}\s*INTENDED_ACTIONS):?\s*(.*?)(?=\*\*[A-Z][A-Z_]+\*\*|#{1,3}\s*[A-Z][A-Z_]+|\Z)',
+            content, re.DOTALL
         )
         if not section_match:
             return actions
 
         section_text = section_match.group(1)
-        for line in section_text.split('\n'):
-            line = line.strip().lstrip('- ')
+        lines = section_text.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip().lstrip('- ')
             match = re.match(r'ACTION:\s*(\w+)\s*\|(.+)', line)
             if not match:
+                i += 1
                 continue
             tool = match.group(1).strip()
             params_str = match.group(2)
+
+            # Body params (content, code) should greedily capture everything
+            # after the key= to end of the params string, ignoring further | splits.
+            body_key = 'content' if tool == 'write_file' else 'code' if tool in ('execute_python', 'execute_bash') else None
             params = {}
-            for part in params_str.split(' | '):
-                part = part.strip()
-                if '=' in part:
-                    key, value = part.split('=', 1)
-                    params[key.strip()] = value
+            if body_key:
+                # Find the body param in the raw params string
+                body_match = re.search(rf'\b{body_key}\s*=', params_str)
+                if body_match:
+                    # Everything before the body param is parsed normally
+                    before = params_str[:body_match.start()]
+                    for part in before.split(' | '):
+                        part = part.strip()
+                        if '=' in part:
+                            key, value = part.split('=', 1)
+                            params[key.strip()] = value
+                    # Body value: everything after key= to end of line
+                    body_value = params_str[body_match.end():].strip()
+                    # If body is empty, collect subsequent non-ACTION lines
+                    if not body_value:
+                        body_lines = []
+                        i += 1
+                        while i < len(lines):
+                            next_line = lines[i]
+                            stripped = next_line.strip().lstrip('- ')
+                            if re.match(r'ACTION:\s*\w+\s*\|', stripped):
+                                break
+                            body_lines.append(next_line)
+                            i += 1
+                        # Strip leading/trailing blank lines, preserve internal structure
+                        while body_lines and not body_lines[0].strip():
+                            body_lines.pop(0)
+                        while body_lines and not body_lines[-1].strip():
+                            body_lines.pop()
+                        body_value = '\n'.join(body_lines)
+                    params[body_key] = body_value
+                else:
+                    # No body param found, parse all params normally
+                    for part in params_str.split(' | '):
+                        part = part.strip()
+                        if '=' in part:
+                            key, value = part.split('=', 1)
+                            params[key.strip()] = value
+            else:
+                for part in params_str.split(' | '):
+                    part = part.strip()
+                    if '=' in part:
+                        key, value = part.split('=', 1)
+                        params[key.strip()] = value
+
             immediate = tool in self.immediate_tools
             actions.append({
                 'tool': tool,
                 'params': params,
                 'immediate': immediate
             })
+            # Only increment if body collection hasn't already advanced i
+            # (when body collection breaks on the next ACTION line, i already
+            # points there; incrementing again would skip it)
+            if not (body_key and body_match and not params_str[body_match.end():].strip()):
+                i += 1
         return actions
 
     def _execute_immediate_actions(self, parsed_actions: list[dict]) -> list[dict]:

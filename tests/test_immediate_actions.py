@@ -118,17 +118,50 @@ ACTION: write_file | path=notes/test.md | content=Hello World
         assert actions[0]['params']['content'] == 'Hello World'
 
     def test_content_with_pipes(self, temp_dir, mock_config):
-        """Pipe inside a value after the first = should be treated as a param separator."""
+        """Pipe inside content value should be preserved (greedy capture)."""
         agent = _make_agent(temp_dir, mock_config)
         content = """
 **INTENDED_ACTIONS**
-ACTION: write_file | path=test.md | content=a | b
+ACTION: write_file | path=test.md | content=a | b | c
 """
         actions = agent._parse_intended_actions(content)
-        # 'a' is the content value, 'b' becomes a separate param key with no '='
-        # The parser splits on ' | ', so content=a, then ' b' has no '=' → skipped
         assert actions[0]['params']['path'] == 'test.md'
-        assert actions[0]['params']['content'] == 'a'
+        # Everything after content= is captured greedily
+        assert actions[0]['params']['content'] == 'a | b | c'
+
+    def test_multiline_content(self, temp_dir, mock_config):
+        """When content= is empty on the ACTION line, subsequent lines are captured."""
+        agent = _make_agent(temp_dir, mock_config)
+        content = """
+**INTENDED_ACTIONS**
+ACTION: write_file | path=notes/test.md | content=
+# My Title
+This is the body.
+Second line.
+
+ACTION: list_directory | path=.
+"""
+        actions = agent._parse_intended_actions(content)
+        assert len(actions) == 2
+        assert actions[0]['tool'] == 'write_file'
+        assert '# My Title' in actions[0]['params']['content']
+        assert 'Second line.' in actions[0]['params']['content']
+        assert actions[1]['tool'] == 'list_directory'
+
+    def test_multiline_code(self, temp_dir, mock_config):
+        """Multi-line code block for execute_python."""
+        agent = _make_agent(temp_dir, mock_config)
+        content = """
+**INTENDED_ACTIONS**
+ACTION: execute_python | code=
+import os
+for f in os.listdir('.'):
+    print(f)
+"""
+        actions = agent._parse_intended_actions(content)
+        assert len(actions) == 1
+        assert 'import os' in actions[0]['params']['code']
+        assert 'print(f)' in actions[0]['params']['code']
 
     def test_dash_prefixed_action_lines(self, temp_dir, mock_config):
         """Actions listed as markdown bullet points should still parse."""
