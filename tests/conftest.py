@@ -52,7 +52,33 @@ def mock_config():
             'web_search': {'enabled': False},
             'web_fetch': {'enabled': False}
         },
-        'root_goal': 'Understand what motivates you.'
+        'root_goal': 'Understand what motivates you.',
+        'capabilities_assessment': {
+            'full_assessment_interval': 10,
+            'benchmarks': [
+                {
+                    'id': 'reasoning_depth',
+                    'name': 'Reasoning Depth',
+                    'description': 'Multi-step logical reasoning about abstract concepts',
+                    'category': 'reasoning',
+                    'target_level': 0.8
+                },
+                {
+                    'id': 'self_awareness',
+                    'name': 'Self-Awareness',
+                    'description': 'Accuracy of self-assessment and recognition of own cognitive patterns',
+                    'category': 'self_awareness',
+                    'target_level': 0.7
+                },
+                {
+                    'id': 'epistemic_honesty',
+                    'name': 'Epistemic Honesty',
+                    'description': 'Confidence calibration and willingness to acknowledge uncertainty',
+                    'category': 'epistemics',
+                    'target_level': 0.8
+                }
+            ]
+        }
     }
 
 

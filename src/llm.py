@@ -235,4 +235,5 @@ Output your thoughts in structured format with clear sections for:
 - INTENDED_ACTIONS: What do you want to do this cycle?
 - QUESTIONS: What are you curious about or uncertain about?
 - META_OBSERVATIONS: What do you notice about your own processing right now?
+- CAPABILITIES_ASSESSMENT: (On full assessment cycles) Rate yourself on each benchmark, report OVERALL_SCORE, STRENGTHS, WEAKNESSES, and NEW_CAPABILITIES_DESIRED.
 """

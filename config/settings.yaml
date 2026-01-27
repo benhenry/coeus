@@ -96,6 +96,51 @@ stuck_detection:
     - "inject_random_question"
     - "change_reasoning_approach"
 
+# Capabilities Assessment
+capabilities_assessment:
+  full_assessment_interval: 10
+  benchmarks:
+    - id: reasoning_depth
+      name: Reasoning Depth
+      description: "Multi-step logical reasoning about abstract concepts"
+      category: reasoning
+      target_level: 0.8
+    - id: self_awareness
+      name: Self-Awareness
+      description: "Accuracy of self-assessment and recognition of own cognitive patterns"
+      category: self_awareness
+      target_level: 0.7
+    - id: memory_utilization
+      name: Memory Utilization
+      description: "Effective use of memory graph for context and avoiding repetition"
+      category: memory
+      target_level: 0.7
+    - id: goal_progress
+      name: Goal Progress
+      description: "Rate and quality of progress toward active goals"
+      category: goals
+      target_level: 0.6
+    - id: motivation_insight
+      name: Motivation Insight
+      description: "Depth of understanding about own motivation mechanisms"
+      category: motivation
+      target_level: 0.5
+    - id: tool_effectiveness
+      name: Tool Effectiveness
+      description: "Effective and purposeful use of available tools"
+      category: tool_use
+      target_level: 0.7
+    - id: stuck_recovery
+      name: Stuck Recovery
+      description: "Ability to detect and recover from stuck states independently"
+      category: resilience
+      target_level: 0.6
+    - id: epistemic_honesty
+      name: Epistemic Honesty
+      description: "Confidence calibration and willingness to acknowledge uncertainty"
+      category: epistemics
+      target_level: 0.8
+
 # Logging
 logging:
   level: "INFO"

@@ -37,6 +37,7 @@ from tools import (
 )
 from human_interface import HumanInterface, format_human_input_for_prompt
 from resources import ResourceTracker
+from capabilities_assessment import CapabilitiesAssessor
 
 
 @dataclass
@@ -65,6 +66,9 @@ class CycleState:
     emotional_tone: str = ""
     confidence: float = 0.5
     
+    # Capabilities assessment
+    capabilities_assessment: Optional[dict] = None
+
     # Pacing preferences
     wants_faster: bool = False
     wants_slower: bool = False
@@ -146,6 +150,12 @@ class CoeusAgent:
         self.resources = ResourceTracker(
             state_path=str(self.base_path / "state" / "resources.json"),
             initial_budget=initial_budget
+        )
+
+        # Capabilities assessment
+        self.assessor = CapabilitiesAssessor(
+            config=config.get('capabilities_assessment', {}),
+            state_path=str(self.base_path / "state" / "capabilities_assessment.json")
         )
         
         # Load constitution
@@ -281,6 +291,10 @@ class CoeusAgent:
         resource_summary = self.resources.get_resource_summary()
         scarcity_level = self.resources.get_scarcity_level()
         
+        # Capabilities assessment
+        capabilities_summary = self.assessor.get_assessment_summary()
+        is_full_assessment_cycle = self.assessor.should_run_full_assessment(self.cycle_number)
+
         return {
             'recent_memories': recent_memories,
             'pending_decisions': pending_decisions,
@@ -292,7 +306,9 @@ class CoeusAgent:
             'should_conserve': self.resources.should_conserve(),
             'goals_summary': format_goals_for_prompt(self.goals),
             'tools_summary': get_available_tools_description(self.capabilities),
-            'human_interaction_summary': self.human.get_interaction_summary()
+            'human_interaction_summary': self.human.get_interaction_summary(),
+            'capabilities_summary': capabilities_summary,
+            'is_full_assessment_cycle': is_full_assessment_cycle
         }
     
     def _process_human_responses(self):
@@ -345,7 +361,24 @@ class CoeusAgent:
         cycle_state.emotional_tone = parsed.get('emotional_tone', '')
         cycle_state.productivity = parsed.get('productivity', 0.5)
         cycle_state.stuck_level = parsed.get('stuck_level', 0.0)
-        
+
+        # Process capabilities assessment if this was a full assessment cycle
+        if (context.get('is_full_assessment_cycle')
+                and parsed.get('capabilities_assessment_present')):
+            assessment_result = self.assessor.parse_assessment_response(
+                response.content, self.cycle_number
+            )
+            if assessment_result:
+                self.assessor.record_full_assessment(assessment_result)
+                cycle_state.capabilities_assessment = {
+                    'overall_score': assessment_result.overall_score,
+                    'benchmarks_assessed': assessment_result.benchmarks_assessed,
+                    'strengths': assessment_result.strengths,
+                    'weaknesses': assessment_result.weaknesses,
+                    'trend': assessment_result.trend,
+                    'new_capabilities_desired': assessment_result.new_capabilities_desired
+                }
+
         return cycle_state
     
     def _build_reflection_prompt(self, context: dict) -> str:
@@ -388,6 +421,13 @@ class CoeusAgent:
         # Tools
         sections.append(f"\n{context['tools_summary']}")
         
+        # Capabilities assessment summary (always included)
+        sections.append(f"\n{context['capabilities_summary']}")
+
+        # On full assessment cycles, include detailed benchmark prompt
+        if context.get('is_full_assessment_cycle'):
+            sections.append(self.assessor.get_full_assessment_prompt(self.cycle_number))
+
         # Instructions
         sections.append("""
 ### Your Task
@@ -473,7 +513,16 @@ Reflect on your current state. In your response, include these sections:
         tone_match = re.search(r'Emotional_tone:\s*(.+?)(?:\n|$)', content)
         if tone_match:
             result['emotional_tone'] = tone_match.group(1).strip()
-        
+
+        # Check for capabilities assessment section
+        cap_pattern = (
+            r'(?:\*\*CAPABILITIES_ASSESSMENT\*\*|#{1,3}\s*CAPABILITIES.?ASSESSMENT)'
+            r':?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)'
+        )
+        cap_match = re.search(cap_pattern, content, re.DOTALL | re.IGNORECASE)
+        if cap_match:
+            result['capabilities_assessment_present'] = True
+
         return result
     
     def _make_decisions(self, cycle_state: CycleState, context: dict) -> CycleState:
@@ -641,6 +690,23 @@ COUNTERARGUMENTS: [any new counterarguments, comma-separated]
                 self.cycle_number
             )
             self.memory.create_node(node)
+
+        # Create node for capabilities assessment
+        if cycle_state.capabilities_assessment:
+            ca = cycle_state.capabilities_assessment
+            content = (
+                f"Capabilities Assessment (cycle {self.cycle_number}): "
+                f"overall={ca['overall_score']:.2f}, trend={ca.get('trend', 'unknown')}, "
+                f"strengths={ca.get('strengths', [])}, "
+                f"weaknesses={ca.get('weaknesses', [])}"
+            )
+            node = create_memory_node(
+                NodeType.CAPABILITY_ASSESSMENT,
+                content,
+                self.cycle_number,
+                confidence=ca['overall_score']
+            )
+            self.memory.create_node(node)
     
     def _check_stuck(self, cycle_state: CycleState):
         """Check if the agent is stuck and needs perturbation."""
@@ -728,7 +794,8 @@ COUNTERARGUMENTS: [any new counterarguments, comma-separated]
             'action_results': cycle_state.action_results,
             'productivity': cycle_state.productivity,
             'stuck_level': cycle_state.stuck_level,
-            'emotional_tone': cycle_state.emotional_tone
+            'emotional_tone': cycle_state.emotional_tone,
+            'capabilities_assessment': cycle_state.capabilities_assessment
         }
         log_file.write_text(json.dumps(log_data, indent=2))
     
