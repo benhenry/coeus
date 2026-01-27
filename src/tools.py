@@ -112,32 +112,42 @@ class SandboxedTools:
     Code execution happens in isolated subprocesses.
     """
     
-    def __init__(self, workspace_path: str, capability_manager: CapabilityManager):
+    def __init__(self, workspace_path: str, capability_manager: CapabilityManager,
+                 additional_paths: Optional[list[str]] = None):
         self.workspace = Path(workspace_path).resolve()
         self.capabilities = capability_manager
-        
+
+        # Allowed roots: workspace + any additional paths
+        self.allowed_roots = [self.workspace]
+        for p in (additional_paths or []):
+            resolved = Path(p).resolve()
+            resolved.mkdir(parents=True, exist_ok=True)
+            self.allowed_roots.append(resolved)
+
         # Ensure workspace exists
         self.workspace.mkdir(parents=True, exist_ok=True)
-    
+
     def _validate_path(self, path: str) -> Path:
         """
-        Validate that a path is within the sandbox.
-        
-        Raises ValueError if path escapes sandbox.
+        Validate that a path is within any allowed root.
+
+        Raises ValueError if path escapes all allowed roots.
         """
         # Resolve to absolute path
         if not os.path.isabs(path):
             full_path = (self.workspace / path).resolve()
         else:
             full_path = Path(path).resolve()
-        
-        # Check it's within workspace
-        try:
-            full_path.relative_to(self.workspace)
-        except ValueError:
-            raise ValueError(f"Path {path} is outside sandbox")
-        
-        return full_path
+
+        # Check it's within any allowed root
+        for root in self.allowed_roots:
+            try:
+                full_path.relative_to(root)
+                return full_path
+            except ValueError:
+                continue
+
+        raise ValueError(f"Path {path} is outside sandbox")
     
     def execute_python(self, code: str, timeout: int = 30) -> ToolResult:
         """

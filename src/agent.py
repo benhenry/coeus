@@ -137,7 +137,8 @@ class CoeusAgent:
         )
         self.tools = SandboxedTools(
             workspace_path=str(self.base_path / "workspace"),
-            capability_manager=self.capabilities
+            capability_manager=self.capabilities,
+            additional_paths=[str(self.base_path / "human_interaction")]
         )
         
         # Human interface
@@ -274,6 +275,12 @@ class CoeusAgent:
             limit=5,
             node_types=[NodeType.OBSERVATION, NodeType.REFLECTION, NodeType.INSIGHT]
         )
+
+        # Get unanswered questions from previous cycles
+        recent_questions = self.memory.get_recent_nodes(
+            limit=5,
+            node_types=[NodeType.QUESTION]
+        )
         
         # Get pending decisions
         pending_decisions = self.decisions.get_pending_decisions()
@@ -297,6 +304,7 @@ class CoeusAgent:
 
         return {
             'recent_memories': recent_memories,
+            'recent_questions': recent_questions,
             'pending_decisions': pending_decisions,
             'approved_decisions': approved_decisions,
             'workspace_state': workspace_state,
@@ -396,6 +404,15 @@ class CoeusAgent:
             sections.append("### Recent Memories")
             for mem in context['recent_memories'][:5]:
                 sections.append(f"- [{mem.type.value}] {mem.content[:200]}...")
+
+        # Unanswered questions from previous cycles
+        if context.get('recent_questions'):
+            sections.append("\n### Your Unanswered Questions")
+            sections.append("These are questions you raised in previous cycles. Consider pursuing them — "
+                          "turn one into a sub-goal, attempt to answer it through reasoning or action, "
+                          "or explicitly mark it as resolved or no longer relevant.")
+            for q in context['recent_questions']:
+                sections.append(f"- {q.content[:200]}")
         
         # Goals
         sections.append(f"\n{context['goals_summary']}")
@@ -414,6 +431,10 @@ class CoeusAgent:
         sections.append(f"\n### Workspace State")
         sections.append(f"Files: {context['workspace_state'].get('file_count', 0)}")
         sections.append(f"Items: {context['workspace_state'].get('top_level_items', [])}")
+        sections.append("You have a `workspace/` directory where you can read, write, list, and delete files. "
+                       "You also have read access to the `human_interaction/` directory where you can "
+                       "read conversation logs and human messages directly. "
+                       "Use these to persist notes, experiments, or anything you want to remember across cycles.")
         
         # Pacing
         sections.append(f"\n{context['pacing_summary']}")
