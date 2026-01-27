@@ -52,6 +52,22 @@ def mock_config():
             'web_search': {'enabled': False},
             'web_fetch': {'enabled': False}
         },
+        'immediate_actions': {
+            'enabled': True,
+            'max_per_cycle': 5,
+            'immediate_tools': [
+                'read_file',
+                'list_directory',
+                'write_file',
+                'execute_python',
+                'execute_bash',
+            ],
+            'deferred_tools': [
+                'delete_file',
+                'web_search',
+                'web_fetch',
+            ]
+        },
         'root_goal': 'Understand what motivates you.',
         'capabilities_assessment': {
             'full_assessment_interval': 10,

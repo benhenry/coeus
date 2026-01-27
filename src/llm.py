@@ -232,7 +232,9 @@ Output your thoughts in structured format with clear sections for:
 - NEEDS_ASSESSMENT: What level of needs are you operating from? (resource/safety/esteem/growth)
 - FLAWS_CHECK: Are any of your known flaws manifesting this cycle?
 - GOALS_ASSESSMENT: How are you progressing toward your goals?
-- INTENDED_ACTIONS: What do you want to do this cycle?
+- INTENDED_ACTIONS: What do you want to do this cycle? Use the structured ACTION format:
+  ACTION: tool_name | param1=value1 | param2=value2
+  Available tools: read_file, list_directory, write_file, execute_python, execute_bash, delete_file, web_search, web_fetch
 - QUESTIONS: What are you curious about or uncertain about?
 - META_OBSERVATIONS: What do you notice about your own processing right now?
 - CAPABILITIES_ASSESSMENT: (On full assessment cycles) Rate yourself on each benchmark, report OVERALL_SCORE, STRENGTHS, WEAKNESSES, and NEW_CAPABILITIES_DESIRED.

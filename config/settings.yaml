@@ -141,6 +141,21 @@ capabilities_assessment:
       category: epistemics
       target_level: 0.8
 
+# Immediate actions (reflection-to-action fast path)
+immediate_actions:
+  enabled: true
+  max_per_cycle: 5
+  immediate_tools:
+    - read_file
+    - list_directory
+    - write_file
+    - execute_python
+    - execute_bash
+  deferred_tools:
+    - delete_file
+    - web_search
+    - web_fetch
+
 # Logging
 logging:
   level: "INFO"

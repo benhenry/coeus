@@ -161,7 +161,14 @@ class CoeusAgent:
         
         # Load constitution
         self.constitution = self._load_constitution()
-        
+
+        # Immediate actions config
+        ia_config = config.get('immediate_actions', {})
+        self.immediate_actions_enabled = ia_config.get('enabled', False)
+        self.immediate_tools = set(ia_config.get('immediate_tools', []))
+        self.deferred_tools = set(ia_config.get('deferred_tools', []))
+        self.max_immediate_per_cycle = ia_config.get('max_per_cycle', 5)
+
         # State
         self.cycle_number = self._load_cycle_number()
         self.birth_time = self._get_or_set_birth_time()
@@ -265,6 +272,20 @@ class CoeusAgent:
         
         return cycle_state
     
+    def _get_previous_action_results(self) -> list[dict]:
+        """Load action results from the previous cycle's log file."""
+        prev_cycle = self.cycle_number - 1
+        if prev_cycle < 1:
+            return []
+        log_file = self.base_path / "logs" / f"cycle_{prev_cycle:05d}.json"
+        if not log_file.exists():
+            return []
+        try:
+            log_data = json.loads(log_file.read_text())
+            return log_data.get('action_results', [])
+        except (json.JSONDecodeError, KeyError):
+            return []
+
     def _gather_context(self) -> dict:
         """Gather all context for the current cycle."""
         # Start cycle tracking
@@ -302,6 +323,9 @@ class CoeusAgent:
         capabilities_summary = self.assessor.get_assessment_summary()
         is_full_assessment_cycle = self.assessor.should_run_full_assessment(self.cycle_number)
 
+        # Get previous cycle's action results
+        previous_action_results = self._get_previous_action_results()
+
         return {
             'recent_memories': recent_memories,
             'recent_questions': recent_questions,
@@ -316,7 +340,8 @@ class CoeusAgent:
             'tools_summary': get_available_tools_description(self.capabilities),
             'human_interaction_summary': self.human.get_interaction_summary(),
             'capabilities_summary': capabilities_summary,
-            'is_full_assessment_cycle': is_full_assessment_cycle
+            'is_full_assessment_cycle': is_full_assessment_cycle,
+            'previous_action_results': previous_action_results
         }
     
     def _process_human_responses(self):
@@ -387,6 +412,13 @@ class CoeusAgent:
                     'new_capabilities_desired': assessment_result.new_capabilities_desired
                 }
 
+        # Parse and execute immediate actions from reflection
+        if self.immediate_actions_enabled:
+            intended = self._parse_intended_actions(response.content)
+            if intended:
+                action_results = self._execute_immediate_actions(intended)
+                cycle_state.action_results.extend(action_results)
+
         return cycle_state
     
     def _build_reflection_prompt(self, context: dict) -> str:
@@ -449,6 +481,22 @@ class CoeusAgent:
         if context.get('is_full_assessment_cycle'):
             sections.append(self.assessor.get_full_assessment_prompt(self.cycle_number))
 
+        # Previous cycle action results
+        if context.get('previous_action_results'):
+            sections.append("\n### Previous Cycle Action Results")
+            sections.append("These actions were executed in your previous cycle:")
+            for r in context['previous_action_results']:
+                tool = r.get('tool', r.get('action', {}).get('type', 'unknown'))
+                status = r.get('status', 'unknown')
+                output = r.get('output', r.get('result', ''))
+                error = r.get('error', '')
+                entry = f"- **{tool}** [{status}]"
+                if output:
+                    entry += f": {str(output)[:200]}"
+                if error:
+                    entry += f" (error: {error})"
+                sections.append(entry)
+
         # Instructions
         sections.append("""
 ### Your Task
@@ -479,6 +527,21 @@ Reflect on your current state. In your response, include these sections:
 - Emotional_tone: A word or phrase describing your current state
 
 **PACING_PREFERENCE**: Do you want the next cycle sooner (wants_faster) or later (wants_slower)? Or normal pacing?
+
+**INTENDED_ACTIONS**: What actions do you want to take this cycle? Use the structured format:
+```
+ACTION: tool_name | param1=value1 | param2=value2
+```
+Available immediate tools (executed this cycle): read_file, list_directory, write_file, execute_python, execute_bash
+Available deferred tools (require decision framework): delete_file, web_search, web_fetch
+
+Examples:
+```
+ACTION: write_file | path=notes/idea.md | content=# My Idea\\nThis is a note about...
+ACTION: list_directory | path=.
+ACTION: read_file | path=human_interaction/conversation_log.md
+ACTION: execute_python | code=print("hello world")
+```
 """)
         
         return "\n".join(sections)
@@ -546,6 +609,112 @@ Reflect on your current state. In your response, include these sections:
 
         return result
     
+    def _parse_intended_actions(self, content: str) -> list[dict]:
+        """Parse structured ACTION: lines from the INTENDED_ACTIONS section."""
+        actions = []
+        # Find the INTENDED_ACTIONS section
+        section_match = re.search(
+            r'(?:\*\*INTENDED_ACTIONS\*\*|#{1,3}\s*INTENDED_ACTIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
+            content, re.DOTALL | re.IGNORECASE
+        )
+        if not section_match:
+            return actions
+
+        section_text = section_match.group(1)
+        for line in section_text.split('\n'):
+            line = line.strip().lstrip('- ')
+            match = re.match(r'ACTION:\s*(\w+)\s*\|(.+)', line)
+            if not match:
+                continue
+            tool = match.group(1).strip()
+            params_str = match.group(2)
+            params = {}
+            for part in params_str.split(' | '):
+                part = part.strip()
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    params[key.strip()] = value
+            immediate = tool in self.immediate_tools
+            actions.append({
+                'tool': tool,
+                'params': params,
+                'immediate': immediate
+            })
+        return actions
+
+    def _execute_immediate_actions(self, parsed_actions: list[dict]) -> list[dict]:
+        """Execute immediate actions and defer the rest to the decision framework."""
+        results = []
+        executed_count = 0
+        for action in parsed_actions:
+            if not action['immediate']:
+                # Deferred — create a decision record
+                decision_id = f"deferred-{action['tool']}-{uuid.uuid4().hex[:8]}"
+                self.decisions.create_decision(
+                    decision_id=decision_id,
+                    summary=f"Deferred action: {action['tool']}({action['params']})",
+                    reasoning="Action requires approval through decision framework",
+                    counterarguments=["Agent requested but tool is in deferred list"],
+                    confidence=0.9,
+                    decision_type=DecisionType.TWO_WAY_DOOR,
+                    current_cycle=self.cycle_number
+                )
+                results.append({
+                    'tool': action['tool'],
+                    'params': action['params'],
+                    'status': 'deferred',
+                    'output': None,
+                    'error': None
+                })
+                continue
+
+            if executed_count >= self.max_immediate_per_cycle:
+                results.append({
+                    'tool': action['tool'],
+                    'params': action['params'],
+                    'status': 'skipped_max_reached',
+                    'output': None,
+                    'error': f"Max {self.max_immediate_per_cycle} immediate actions per cycle"
+                })
+                continue
+
+            tool_result = self._execute_tool_action(action)
+            executed_count += 1
+            results.append({
+                'tool': action['tool'],
+                'params': action['params'],
+                'status': 'success' if tool_result.success else 'error',
+                'output': str(tool_result.output)[:500] if tool_result.output else None,
+                'error': tool_result.error
+            })
+        return results
+
+    def _execute_tool_action(self, action: dict) -> 'ToolResult':
+        """Dispatch an immediate action to the appropriate SandboxedTools method."""
+        from tools import ToolResult
+        tool = action['tool']
+        params = action['params']
+        try:
+            if tool == 'read_file':
+                return self.tools.read_file(params.get('path', ''))
+            elif tool == 'write_file':
+                content = params.get('content', '')
+                # Handle escaped newlines
+                content = content.replace('\\n', '\n')
+                return self.tools.write_file(params.get('path', ''), content)
+            elif tool == 'list_directory':
+                return self.tools.list_directory(params.get('path', '.'))
+            elif tool == 'execute_python':
+                code = params.get('code', '')
+                code = code.replace('\\n', '\n')
+                return self.tools.execute_python(code)
+            elif tool == 'execute_bash':
+                return self.tools.execute_bash(params.get('command', ''))
+            else:
+                return ToolResult(success=False, output=None, error=f"Unknown tool: {tool}")
+        except Exception as e:
+            return ToolResult(success=False, output=None, error=str(e))
+
     def _make_decisions(self, cycle_state: CycleState, context: dict) -> CycleState:
         """
         Decision phase - decide what actions to take.
@@ -712,6 +881,25 @@ COUNTERARGUMENTS: [any new counterarguments, comma-separated]
             )
             self.memory.create_node(node)
 
+        # Create nodes for executed immediate actions
+        for ar in cycle_state.action_results:
+            if ar.get('status') in ('success', 'error'):
+                tool = ar.get('tool', 'unknown')
+                status = ar.get('status')
+                output_snippet = str(ar.get('output', ''))[:100]
+                error_snippet = ar.get('error', '')
+                content = f"Action: {tool} [{status}]"
+                if output_snippet:
+                    content += f" — {output_snippet}"
+                if error_snippet:
+                    content += f" (error: {error_snippet})"
+                node = create_memory_node(
+                    NodeType.OBSERVATION,
+                    content,
+                    self.cycle_number
+                )
+                self.memory.create_node(node)
+
         # Create node for capabilities assessment
         if cycle_state.capabilities_assessment:
             ca = cycle_state.capabilities_assessment
@@ -816,7 +1004,11 @@ COUNTERARGUMENTS: [any new counterarguments, comma-separated]
             'productivity': cycle_state.productivity,
             'stuck_level': cycle_state.stuck_level,
             'emotional_tone': cycle_state.emotional_tone,
-            'capabilities_assessment': cycle_state.capabilities_assessment
+            'capabilities_assessment': cycle_state.capabilities_assessment,
+            'immediate_actions_executed': sum(
+                1 for r in cycle_state.action_results
+                if r.get('status') in ('success', 'error')
+            )
         }
         log_file.write_text(json.dumps(log_data, indent=2))
     
