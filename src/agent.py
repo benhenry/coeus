@@ -393,20 +393,21 @@ Reflect on your current state. In your response, include these sections:
             'stuck_level': 0.0
         }
         
-        # Extract sections using regex
+        # Extract sections using regex - handles both **SECTION** and ## SECTION formats
         sections = {
-            'observations': r'\*\*OBSERVATIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'reflections': r'\*\*REFLECTIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'questions': r'\*\*QUESTIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'meta_observations': r'\*\*META_OBSERVATIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
+            'observations': r'(?:\*\*OBSERVATIONS\*\*|#{1,3}\s*OBSERVATIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
+            'reflections': r'(?:\*\*REFLECTIONS\*\*|#{1,3}\s*REFLECTIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
+            'questions': r'(?:\*\*QUESTIONS\*\*|#{1,3}\s*QUESTIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
+            'meta_observations': r'(?:\*\*META_OBSERVATIONS\*\*|#{1,3}\s*META.?OBSERVATIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
         }
-        
+
         for key, pattern in sections.items():
             match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
             if match:
                 text = match.group(1).strip()
-                # Split into list items
-                items = [item.strip().lstrip('- ') for item in text.split('\n') if item.strip()]
+                # Split into list items, filtering out empty lines and sub-headers
+                items = [item.strip().lstrip('- ') for item in text.split('\n')
+                        if item.strip() and not item.strip().startswith('#')]
                 result[key] = items
         
         # Extract self-assessment values
