@@ -20,23 +20,23 @@ from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
 
-from .llm import LLMInterface, LLMResponse, build_system_prompt
-from .memory import (
+from llm import LLMInterface, LLMResponse, build_system_prompt
+from memory import (
     MemoryGraph, MemoryNode, NodeType, EdgeType,
     create_memory_node, ContextCapture
 )
-from .goals import GoalTree, format_goals_for_prompt
-from .decisions import (
+from goals import GoalTree, format_goals_for_prompt
+from decisions import (
     DecisionFramework, DecisionRecord, DecisionType, DecisionStatus,
     format_decision_for_prompt
 )
-from .pacing import PacingController, CycleMetrics, calculate_output_similarity
-from .tools import (
+from pacing import PacingController, CycleMetrics, calculate_output_similarity
+from tools import (
     SandboxedTools, CapabilityManager, WebSearchTool,
     format_tool_result, get_available_tools_description
 )
-from .human_interface import HumanInterface, format_human_input_for_prompt
-from .resources import ResourceTracker
+from human_interface import HumanInterface, format_human_input_for_prompt
+from resources import ResourceTracker
 
 
 @dataclass
@@ -436,25 +436,28 @@ Reflect on your current state. In your response, include these sections:
             'stuck_level': 0.0
         }
         
-        # Extract sections using regex
+        # Extract sections using regex - handles both **SECTION** and ## SECTION formats
+        section_boundary = r'(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)'
         sections = {
-            'observations': r'\*\*OBSERVATIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'reflections': r'\*\*REFLECTIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'questions': r'\*\*QUESTIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'meta_observations': r'\*\*META_OBSERVATIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
-            'flaws_check': r'\*\*FLAWS_CHECK\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
+            'observations': rf'(?:\*\*OBSERVATIONS\*\*|#{{1,3}}\s*OBSERVATIONS):?\s*(.*?){section_boundary}',
+            'reflections': rf'(?:\*\*REFLECTIONS\*\*|#{{1,3}}\s*REFLECTIONS):?\s*(.*?){section_boundary}',
+            'questions': rf'(?:\*\*QUESTIONS\*\*|#{{1,3}}\s*QUESTIONS):?\s*(.*?){section_boundary}',
+            'meta_observations': rf'(?:\*\*META_OBSERVATIONS\*\*|#{{1,3}}\s*META.?OBSERVATIONS):?\s*(.*?){section_boundary}',
+            'flaws_check': rf'(?:\*\*FLAWS_CHECK\*\*|#{{1,3}}\s*FLAWS.?CHECK):?\s*(.*?){section_boundary}',
         }
-        
+
         for key, pattern in sections.items():
             match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
             if match:
                 text = match.group(1).strip()
-                # Split into list items
-                items = [item.strip().lstrip('- ') for item in text.split('\n') if item.strip()]
+                # Split into list items, filtering out empty lines and sub-headers
+                items = [item.strip().lstrip('- ') for item in text.split('\n')
+                        if item.strip() and not item.strip().startswith('#')]
                 result[key] = items
-        
+
         # Extract needs assessment (single value, not list)
-        needs_match = re.search(r'\*\*NEEDS_ASSESSMENT\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)', content, re.DOTALL | re.IGNORECASE)
+        needs_pattern = rf'(?:\*\*NEEDS_ASSESSMENT\*\*|#{{1,3}}\s*NEEDS.?ASSESSMENT):?\s*(.*?){section_boundary}'
+        needs_match = re.search(needs_pattern, content, re.DOTALL | re.IGNORECASE)
         if needs_match:
             result['needs_assessment'] = needs_match.group(1).strip()
         

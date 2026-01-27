@@ -150,14 +150,20 @@ def build_system_prompt(
         for c in category
     ])
     
-    goals_text = "\n".join([
-        f"- [{g.get('priority', 'normal')}] {g['content']}"
-        for g in current_goals
-    ])
-    
+    def format_goal(g) -> str:
+        """Handle both Goal objects and dicts."""
+        if hasattr(g, 'priority') and hasattr(g, 'content'):
+            priority = g.priority.value if hasattr(g.priority, 'value') else g.priority
+            return f"- [{priority}] {g.content}"
+        else:
+            return f"- [{g.get('priority', 'normal')}] {g['content']}"
+
+    goals_text = "\n".join([format_goal(g) for g in current_goals])
+
+    # capabilities is dict[str, str] where value is the status string
     capabilities_text = "\n".join([
-        f"- {name}: {'enabled' if cap.get('enabled') else 'disabled'}"
-        for name, cap in capabilities.items()
+        f"- {name}: {status}"
+        for name, status in capabilities.items()
     ])
     
     # Build self-knowledge sections
