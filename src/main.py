@@ -12,6 +12,8 @@ Usage:
 """
 
 import argparse
+import atexit
+import importlib
 import json
 import os
 import signal
@@ -114,55 +116,104 @@ def show_status(base_path: str = "."):
     print("\n" + "="*60 + "\n")
 
 
-def run_agent(config: dict, base_path: str = ".", once: bool = False):
-    """Run the agent loop."""
+def _write_pid_file(base_path: str) -> Path:
+    """Write PID file and register cleanup."""
+    pid_file = Path(base_path) / "coeus.pid"
+    pid_file.write_text(str(os.getpid()))
+    atexit.register(lambda: pid_file.unlink(missing_ok=True))
+    return pid_file
+
+
+def _reload_modules():
+    """Reload all Coeus src modules so code changes take effect."""
+    # Order matters: reload leaves first, then modules that depend on them
+    module_names = [
+        'tools', 'memory', 'goals', 'decisions', 'pacing',
+        'human_interface', 'resources', 'capabilities_assessment',
+        'llm', 'agent'
+    ]
+    reloaded = []
+    for name in module_names:
+        if name in sys.modules:
+            importlib.reload(sys.modules[name])
+            reloaded.append(name)
+    return reloaded
+
+
+def _create_agent(config: dict, base_path: str):
+    """Import (or re-import) CoeusAgent and construct a fresh instance."""
     from agent import CoeusAgent
-    
-    agent = CoeusAgent(config, base_path)
-    
-    # Set up signal handlers for graceful shutdown
+    return CoeusAgent(config, base_path)
+
+
+def run_agent(config_path: str, config: dict, base_path: str = ".", once: bool = False):
+    """Run the agent loop with SIGHUP reload support."""
+    agent = _create_agent(config, base_path)
+
     shutdown_requested = False
-    
-    def signal_handler(signum, frame):
+    reload_requested = False
+
+    def shutdown_handler(signum, frame):
         nonlocal shutdown_requested
         print("\nShutdown requested...")
         shutdown_requested = True
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
+
+    def reload_handler(signum, frame):
+        nonlocal reload_requested
+        print("\nReload requested (SIGHUP)...")
+        reload_requested = True
+
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+    signal.signal(signal.SIGHUP, reload_handler)
+
+    pid_file = _write_pid_file(base_path)
+
     print(f"\n{'='*60}")
     print("COEUS STARTING")
     print(f"{'='*60}")
     print(f"Birth time: {agent.birth_time}")
     print(f"Starting at cycle: {agent.cycle_number}")
+    print(f"PID file: {pid_file}")
+    print(f"Reload with: kill -HUP $(cat {pid_file})")
     print(f"{'='*60}\n")
-    
+
     try:
         while not shutdown_requested:
+            # Check for reload between cycles
+            if reload_requested:
+                reload_requested = False
+                print(f"\n[{datetime.now(timezone.utc).isoformat()}] Reloading...")
+                agent.shutdown()
+                config = load_config(config_path)
+                reloaded = _reload_modules()
+                agent = _create_agent(config, base_path)
+                print(f"  Reloaded modules: {', '.join(reloaded)}")
+                print(f"  Resuming at cycle: {agent.cycle_number}")
+
             # Run a cycle
             print(f"\n[{datetime.now(timezone.utc).isoformat()}] Starting cycle {agent.cycle_number + 1}")
-            
+
             cycle_state = agent.run_cycle()
-            
+
             print(f"  Productivity: {cycle_state.productivity:.0%}")
             print(f"  Stuck level: {cycle_state.stuck_level:.0%}")
             print(f"  Observations: {len(cycle_state.observations)}")
             print(f"  Actions taken: {len(cycle_state.action_results)}")
-            
+
             if once:
                 print("\nSingle cycle completed. Exiting.")
                 break
-            
+
             # Sleep until next cycle
             interval = agent.get_next_cycle_interval()
             print(f"\n  Next cycle in {interval/60:.1f} minutes...")
-            
-            # Sleep in small increments to allow for interrupt
+
+            # Sleep in small increments to allow for interrupt or reload
             sleep_until = time.time() + interval
-            while time.time() < sleep_until and not shutdown_requested:
+            while time.time() < sleep_until and not shutdown_requested and not reload_requested:
                 time.sleep(min(10, sleep_until - time.time()))
-    
+
     finally:
         agent.shutdown()
         print("\nCoeus shut down cleanly.")
@@ -231,7 +282,7 @@ def main():
         return
     
     # Run the agent
-    run_agent(config, args.base_path, once=args.once)
+    run_agent(args.config, config, args.base_path, once=args.once)
 
 
 if __name__ == '__main__':
