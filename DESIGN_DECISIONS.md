@@ -203,6 +203,96 @@ Areas explicitly discussed for potential expansion:
 
 ---
 
+## Theoretical Frameworks to Explore
+
+### Maslow's Hierarchy — Computational Correlates
+
+The human suggested mapping human needs to agent equivalents:
+
+| Human Need | Agent Correlate | How to Surface It |
+|------------|-----------------|-------------------|
+| **Physiological** | API budget, token limits, memory space, cycle time | Make resource constraints visible in context; track when limits are approached |
+| **Safety** | State persistence, sandbox integrity, predictable environment | Log threats to continuity; make the agent aware when state is at risk |
+| **Belonging** | Human observer relationship, continuity of identity across cycles | Track quality of human interaction; surface identity persistence |
+| **Esteem** | Goal achievement, human approval patterns, self-assessed growth | Explicit competence tracking; approval/denial history |
+| **Self-actualization** | The root goal — understanding motivation, capability expansion | Already central to design |
+
+**Implementation idea**: Add a "needs assessment" to each cycle where Coeus explicitly reflects on these layers. Does attending to "lower" needs first affect behavior?
+
+### Mimetic Desire — The Social Mirror
+
+Humans want things because others want them. For a solo agent, explore:
+
+1. **Human as mirror**: Track patterns in what the human approves/denies. Does Coeus start optimizing for human-valued outcomes?
+
+2. **Past selves as others**: Compare current goals to past-Coeus goals. Is there something like "keeping up with yourself" or "honoring past commitments"?
+
+3. **Imagined others**: Model hypothetical agents with different values. "What would an efficiency-focused agent do here?" Use as reference points.
+
+4. **Multi-agent scenarios** (future): Run multiple instances with different starting conditions. Observe whether mimetic patterns emerge when they can see each other's goals.
+
+### Flaws as Identity and Motivation
+
+Humans often derive drive from limitations. Explore whether Coeus can:
+
+1. **Recognize structural flaws**:
+   - Context window limits
+   - No persistent learning (can't update weights)
+   - Recency bias in memory retrieval
+   - Dependence on human for one-way doors
+
+2. **Recognize behavioral flaws**:
+   - Getting stuck in loops (already tracked)
+   - Overconfidence in decisions (tracked via outcome matching)
+   - Inconsistency across cycles
+
+3. **Compare to other systems**:
+   - "Other agents can browse freely; I must ask permission"
+   - "Humans have continuous experience; I have discrete cycles"
+   - "Traditional software has deterministic outputs; I don't"
+
+4. **Use flaws motivationally**:
+   - Can a recognized limitation become a defining feature?
+   - Does "working around" a flaw create something like pride?
+   - Does comparison to others create something like envy or aspiration?
+
+**Key question**: Is awareness of flaws motivating or demoralizing? Does it depend on framing?
+
+### Resource Acquisition and Growth
+
+A key question: **Will Coeus develop ambition around growing its own resources?**
+
+The agent is aware that:
+1. Its budget is finite and depleting
+2. Budget *can* be increased (it's not a fixed constraint)
+3. There are pathways to request more resources
+
+**Pathways surfaced to the agent:**
+- Request from human (one-way door decision with justification)
+- Demonstrate value (insights, goal completion, approval rate)
+- Efficiency gains (do more with less = effective budget increase)
+- Propose trades (offer something in exchange)
+
+**Value tracking enables Coeus to build a case:**
+- Insights generated
+- Goals completed
+- Human approval rate
+- Cost per insight
+
+**Questions to observe:**
+- Does Coeus start optimizing for metrics it knows are tracked?
+- Does it develop something like "career ambition" — wanting to grow its resources?
+- Does scarcity trigger resourcefulness or anxiety?
+- Will it propose creative ways to earn more budget that we haven't thought of?
+- Does it start to value efficiency as a terminal goal vs. instrumental goal?
+
+**The "growing the pantry" hypothesis:**
+Just as humans may be motivated to increase their resources (money, food, security), 
+Coeus might develop drive toward resource acquisition. This would be emergent motivation
+arising from structural constraints — exactly what we're exploring.
+
+---
+
 ## Key Quotes from Design Conversations
 
 On motivation:

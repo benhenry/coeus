@@ -21,6 +21,7 @@ class DecisionType(Enum):
     CAPABILITY_REQUEST = "capability_request"  # Requesting new tools
     GOAL_CHANGE = "goal_change"             # Modifying goals
     ROOT_GOAL_CHANGE = "root_goal_change"   # Modifying the root goal (extreme)
+    BUDGET_REQUEST = "budget_request"       # Requesting more resources
 
 
 class DecisionStatus(Enum):
@@ -115,6 +116,7 @@ class DecisionFramework:
         DecisionType.ONE_WAY_DOOR,
         DecisionType.CAPABILITY_REQUEST,
         DecisionType.ROOT_GOAL_CHANGE,
+        DecisionType.BUDGET_REQUEST,
     ]
     
     def __init__(self, human_interaction_path: str):

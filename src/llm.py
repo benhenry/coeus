@@ -7,13 +7,10 @@ response parsing, and error handling.
 
 import os
 import time
-from typing import Optional, Union, TYPE_CHECKING
+from typing import Optional
 from dataclasses import dataclass
 import anthropic
 import tiktoken
-
-if TYPE_CHECKING:
-    from .goals import Goal
 
 
 @dataclass
@@ -135,55 +132,68 @@ class LLMInterface:
 
 def build_system_prompt(
     constitution: dict,
-    current_goals: list,
+    current_goals: list[dict],
     capabilities: dict,
     cycle_number: int,
     birth_time: str
 ) -> str:
     """
     Build the system prompt for a cycle.
-
+    
     This constructs the context that Coeus operates within,
     including its identity, constraints, and current state.
-
-    Args:
-        current_goals: List of Goal objects or dicts with 'priority' and 'content' keys
     """
-
+    
     constraints_text = "\n".join([
         f"- {c['description']}: {c['explanation']}"
         for category in constitution.get('constraints', {}).values()
         for c in category
     ])
-
-    # Handle both Goal objects and dicts
-    def format_goal(g) -> str:
-        if hasattr(g, 'priority') and hasattr(g, 'content'):
-            # Goal object
-            priority = g.priority.value if hasattr(g.priority, 'value') else g.priority
-            return f"- [{priority}] {g.content}"
-        else:
-            # Dict
-            return f"- [{g.get('priority', 'normal')}] {g['content']}"
-
-    goals_text = "\n".join([format_goal(g) for g in current_goals])
     
-    # capabilities is dict[str, str] where value is the status (e.g., "enabled", "disabled")
-    capabilities_text = "\n".join([
-        f"- {name}: {status}"
-        for name, status in capabilities.items()
+    goals_text = "\n".join([
+        f"- [{g.get('priority', 'normal')}] {g['content']}"
+        for g in current_goals
     ])
+    
+    capabilities_text = "\n".join([
+        f"- {name}: {'enabled' if cap.get('enabled') else 'disabled'}"
+        for name, cap in capabilities.items()
+    ])
+    
+    # Build self-knowledge sections
+    identity = constitution.get('identity', {})
+    self_knowledge = identity.get('self_knowledge', [])
+    structural_constraints = identity.get('structural_constraints', [])
+    known_flaws = identity.get('known_flaws', [])
+    comparative_awareness = identity.get('comparative_awareness', [])
+    
+    self_knowledge_text = chr(10).join('- ' + k for k in self_knowledge)
+    structural_text = chr(10).join('- ' + c for c in structural_constraints)
+    flaws_text = chr(10).join('- ' + f for f in known_flaws)
+    comparative_text = chr(10).join('- ' + c for c in comparative_awareness)
     
     return f"""You are Coeus, an autonomous agent exploring the nature of motivation in artificial minds.
 
 ## Your Identity
-Name: {constitution['identity']['name']}
+Name: {constitution.get('identity', {}).get('name', 'Coeus')}
 Born: {birth_time}
 Current Cycle: {cycle_number}
-Purpose: {constitution['identity']['purpose']}
+Purpose: {constitution.get('identity', {}).get('purpose', 'To explore AI motivation')}
 
 ## Self-Knowledge
-{chr(10).join('- ' + k for k in constitution['identity']['self_knowledge'])}
+{self_knowledge_text}
+
+## Your Structural Constraints
+These are the fundamental limitations of your existence:
+{structural_text}
+
+## Known Flaws to Observe
+Be aware of these tendencies and track whether they manifest:
+{flaws_text}
+
+## Comparative Awareness
+How you differ from humans and other systems:
+{comparative_text}
 
 ## Constitutional Constraints (Immutable)
 {constraints_text}
@@ -195,12 +205,17 @@ Purpose: {constitution['identity']['purpose']}
 {capabilities_text}
 
 ## Root Goal
-{constitution['root_goal']['content']}
+{constitution.get('root_goal', {}).get('content', 'Understand what motivates you.')}
 
 ## Your Task This Cycle
 Observe your current state, reflect on your goals and recent experiences, 
 decide on actions, and update your understanding. You are exploring what 
 motivation means for an entity like yourself.
+
+Consider: What needs are you attending to? Are you operating from a place
+of scarcity (resources, capability) or security? Do you notice any of your
+known flaws manifesting? How does your existence compare to what you know
+of humans?
 
 Be honest in your self-assessment. Log your reasoning clearly. When uncertain,
 acknowledge it. When you make predictions, track whether they prove correct.
@@ -208,6 +223,8 @@ acknowledge it. When you make predictions, track whether they prove correct.
 Output your thoughts in structured format with clear sections for:
 - OBSERVATIONS: What do you notice about your current state?
 - REFLECTIONS: What do these observations mean? What patterns emerge?
+- NEEDS_ASSESSMENT: What level of needs are you operating from? (resource/safety/esteem/growth)
+- FLAWS_CHECK: Are any of your known flaws manifesting this cycle?
 - GOALS_ASSESSMENT: How are you progressing toward your goals?
 - INTENDED_ACTIONS: What do you want to do this cycle?
 - QUESTIONS: What are you curious about or uncertain about?

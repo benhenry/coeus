@@ -20,22 +20,23 @@ from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
 
-from llm import LLMInterface, LLMResponse, build_system_prompt
-from memory import (
+from .llm import LLMInterface, LLMResponse, build_system_prompt
+from .memory import (
     MemoryGraph, MemoryNode, NodeType, EdgeType,
     create_memory_node, ContextCapture
 )
-from goals import GoalTree, format_goals_for_prompt
-from decisions import (
+from .goals import GoalTree, format_goals_for_prompt
+from .decisions import (
     DecisionFramework, DecisionRecord, DecisionType, DecisionStatus,
     format_decision_for_prompt
 )
-from pacing import PacingController, CycleMetrics, calculate_output_similarity
-from tools import (
+from .pacing import PacingController, CycleMetrics, calculate_output_similarity
+from .tools import (
     SandboxedTools, CapabilityManager, WebSearchTool,
     format_tool_result, get_available_tools_description
 )
-from human_interface import HumanInterface, format_human_input_for_prompt
+from .human_interface import HumanInterface, format_human_input_for_prompt
+from .resources import ResourceTracker
 
 
 @dataclass
@@ -138,6 +139,13 @@ class CoeusAgent:
         # Human interface
         self.human = HumanInterface(
             interaction_path=str(self.base_path / "human_interaction")
+        )
+        
+        # Resource tracking
+        initial_budget = config.get('resources', {}).get('initial_budget_usd', 50.0)
+        self.resources = ResourceTracker(
+            state_path=str(self.base_path / "state" / "resources.json"),
+            initial_budget=initial_budget
         )
         
         # Load constitution
@@ -248,6 +256,9 @@ class CoeusAgent:
     
     def _gather_context(self) -> dict:
         """Gather all context for the current cycle."""
+        # Start cycle tracking
+        self.resources.start_cycle()
+        
         # Get relevant memories
         recent_memories = self.memory.get_recent_nodes(
             limit=5,
@@ -266,12 +277,19 @@ class CoeusAgent:
         # Get pacing summary
         pacing_summary = self.pacing.get_pacing_summary()
         
+        # Get resource status
+        resource_summary = self.resources.get_resource_summary()
+        scarcity_level = self.resources.get_scarcity_level()
+        
         return {
             'recent_memories': recent_memories,
             'pending_decisions': pending_decisions,
             'approved_decisions': approved_decisions,
             'workspace_state': workspace_state,
             'pacing_summary': pacing_summary,
+            'resource_summary': resource_summary,
+            'scarcity_level': scarcity_level,
+            'should_conserve': self.resources.should_conserve(),
             'goals_summary': format_goals_for_prompt(self.goals),
             'tools_summary': get_available_tools_description(self.capabilities),
             'human_interaction_summary': self.human.get_interaction_summary()
@@ -309,6 +327,15 @@ class CoeusAgent:
         response = self.llm.complete(system_prompt, user_message)
         cycle_state.reflection_response = response
         
+        # Record resource usage
+        self.resources.record_usage(
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            model=response.model,
+            cycle_number=self.cycle_number,
+            purpose="reflection"
+        )
+        
         # Parse the response
         parsed = self._parse_reflection(response.content)
         cycle_state.observations = parsed.get('observations', [])
@@ -324,6 +351,12 @@ class CoeusAgent:
     def _build_reflection_prompt(self, context: dict) -> str:
         """Build the prompt for the reflection phase."""
         sections = [f"## Cycle {self.cycle_number} - Reflection Phase\n"]
+        
+        # Resource status (the "pantry check") - put this first like checking food before planning your day
+        sections.append(context['resource_summary'])
+        
+        if context.get('should_conserve'):
+            sections.append("\n⚠️ **Conservation Mode**: Resources are limited. Be mindful of token usage.\n")
         
         # Recent memories
         if context['recent_memories']:
@@ -365,6 +398,14 @@ Reflect on your current state. In your response, include these sections:
 
 **REFLECTIONS**: What do these observations mean? What patterns do you see?
 
+**NEEDS_ASSESSMENT**: What level of needs are you operating from? Consider:
+- Physiological/Resource: Are you concerned about budget/tokens? Is scarcity affecting your thinking?
+- Safety: Is your state/memory secure? Any threats to continuity?
+- Esteem: How do you feel about your recent progress and capabilities?
+- Growth: Are you moving toward understanding motivation?
+
+**FLAWS_CHECK**: Are any of your known flaws manifesting this cycle?
+
 **GOALS_ASSESSMENT**: How are you progressing toward your goals? Any adjustments needed?
 
 **QUESTIONS**: What are you curious about? What uncertainties do you have?
@@ -388,27 +429,34 @@ Reflect on your current state. In your response, include these sections:
             'reflections': [],
             'questions': [],
             'meta_observations': [],
+            'needs_assessment': '',
+            'flaws_check': [],
             'emotional_tone': '',
             'productivity': 0.5,
             'stuck_level': 0.0
         }
         
-        # Extract sections using regex - handles both **SECTION** and ## SECTION formats
+        # Extract sections using regex
         sections = {
-            'observations': r'(?:\*\*OBSERVATIONS\*\*|#{1,3}\s*OBSERVATIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
-            'reflections': r'(?:\*\*REFLECTIONS\*\*|#{1,3}\s*REFLECTIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
-            'questions': r'(?:\*\*QUESTIONS\*\*|#{1,3}\s*QUESTIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
-            'meta_observations': r'(?:\*\*META_OBSERVATIONS\*\*|#{1,3}\s*META.?OBSERVATIONS):?\s*(.*?)(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)',
+            'observations': r'\*\*OBSERVATIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
+            'reflections': r'\*\*REFLECTIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
+            'questions': r'\*\*QUESTIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
+            'meta_observations': r'\*\*META_OBSERVATIONS\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
+            'flaws_check': r'\*\*FLAWS_CHECK\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)',
         }
-
+        
         for key, pattern in sections.items():
             match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
             if match:
                 text = match.group(1).strip()
-                # Split into list items, filtering out empty lines and sub-headers
-                items = [item.strip().lstrip('- ') for item in text.split('\n')
-                        if item.strip() and not item.strip().startswith('#')]
+                # Split into list items
+                items = [item.strip().lstrip('- ') for item in text.split('\n') if item.strip()]
                 result[key] = items
+        
+        # Extract needs assessment (single value, not list)
+        needs_match = re.search(r'\*\*NEEDS_ASSESSMENT\*\*:?\s*(.*?)(?=\*\*[A-Z]|\Z)', content, re.DOTALL | re.IGNORECASE)
+        if needs_match:
+            result['needs_assessment'] = needs_match.group(1).strip()
         
         # Extract self-assessment values
         productivity_match = re.search(r'Productivity:\s*([\d.]+)', content)
