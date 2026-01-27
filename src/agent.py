@@ -20,22 +20,22 @@ from dataclasses import dataclass
 from typing import Optional
 from pathlib import Path
 
-from .llm import LLMInterface, LLMResponse, build_system_prompt
-from .memory import (
+from llm import LLMInterface, LLMResponse, build_system_prompt
+from memory import (
     MemoryGraph, MemoryNode, NodeType, EdgeType,
     create_memory_node, ContextCapture
 )
-from .goals import GoalTree, format_goals_for_prompt
-from .decisions import (
+from goals import GoalTree, format_goals_for_prompt
+from decisions import (
     DecisionFramework, DecisionRecord, DecisionType, DecisionStatus,
     format_decision_for_prompt
 )
-from .pacing import PacingController, CycleMetrics, calculate_output_similarity
-from .tools import (
+from pacing import PacingController, CycleMetrics, calculate_output_similarity
+from tools import (
     SandboxedTools, CapabilityManager, WebSearchTool,
     format_tool_result, get_available_tools_description
 )
-from .human_interface import HumanInterface, format_human_input_for_prompt
+from human_interface import HumanInterface, format_human_input_for_prompt
 
 
 @dataclass

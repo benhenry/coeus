@@ -20,7 +20,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add src directory to path for imports when running as script
+sys.path.insert(0, str(Path(__file__).parent))
+
 import yaml
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def load_config(config_path: str = "config/settings.yaml") -> dict:
@@ -109,7 +116,7 @@ def show_status(base_path: str = "."):
 
 def run_agent(config: dict, base_path: str = ".", once: bool = False):
     """Run the agent loop."""
-    from .agent import CoeusAgent
+    from agent import CoeusAgent
     
     agent = CoeusAgent(config, base_path)
     
@@ -163,7 +170,7 @@ def run_agent(config: dict, base_path: str = ".", once: bool = False):
 
 def trigger_burst(config: dict, num_cycles: int, base_path: str = "."):
     """Trigger burst mode for rapid cycles."""
-    from .agent import CoeusAgent
+    from agent import CoeusAgent
     
     agent = CoeusAgent(config, base_path)
     agent.trigger_burst(num_cycles)
