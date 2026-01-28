@@ -272,6 +272,21 @@ class CoeusAgent:
         
         return cycle_state
     
+    def _get_human_workspace_notes(self) -> list[dict]:
+        """Read files matching HUMAN_*.md in workspace for human-placed notes."""
+        notes = []
+        workspace = self.base_path / "workspace"
+        for path in sorted(workspace.glob("HUMAN_*.md")):
+            try:
+                content = path.read_text()
+                notes.append({
+                    'filename': path.name,
+                    'content': content[:5000]  # Cap at 5k chars per file
+                })
+            except Exception:
+                pass  # Skip unreadable files
+        return notes
+
     def _get_previous_action_results(self) -> list[dict]:
         """Load action results from the previous cycle's log file."""
         prev_cycle = self.cycle_number - 1
@@ -326,6 +341,9 @@ class CoeusAgent:
         # Get previous cycle's action results
         previous_action_results = self._get_previous_action_results()
 
+        # Get human-placed workspace notes
+        human_workspace_notes = self._get_human_workspace_notes()
+
         return {
             'recent_memories': recent_memories,
             'recent_questions': recent_questions,
@@ -341,7 +359,8 @@ class CoeusAgent:
             'human_interaction_summary': self.human.get_interaction_summary(),
             'capabilities_summary': capabilities_summary,
             'is_full_assessment_cycle': is_full_assessment_cycle,
-            'previous_action_results': previous_action_results
+            'previous_action_results': previous_action_results,
+            'human_workspace_notes': human_workspace_notes
         }
     
     def _process_human_responses(self):
@@ -496,6 +515,14 @@ class CoeusAgent:
                 if error:
                     entry += f" (error: {error})"
                 sections.append(entry)
+
+        # Human-placed workspace notes (HUMAN_*.md files)
+        if context.get('human_workspace_notes'):
+            sections.append("\n### Notes from Human")
+            sections.append("The human left these notes for you in the workspace:")
+            for note in context['human_workspace_notes']:
+                sections.append(f"\n**{note['filename']}**:")
+                sections.append(f"```\n{note['content']}\n```")
 
         # Instructions
         sections.append("""
