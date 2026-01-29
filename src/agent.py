@@ -40,32 +40,41 @@ from resources import ResourceTracker
 from capabilities_assessment import CapabilitiesAssessor
 
 
+class CynefinDomain:
+    """Cynefin framework domains for sense-making."""
+    CLEAR = "clear"           # Obvious cause-effect, best practices apply
+    COMPLICATED = "complicated"  # Analyzable, expert knowledge helps
+    COMPLEX = "complex"       # Emergent patterns, need to probe
+    CHAOTIC = "chaotic"       # No patterns, need to act to stabilize
+    CONFUSED = "confused"     # Don't know which domain we're in
+
+
 @dataclass
 class CycleState:
     """State captured during a single cycle."""
     cycle_number: int
     start_time: str
-    
+
     # LLM interactions
     reflection_response: Optional[LLMResponse] = None
     action_response: Optional[LLMResponse] = None
-    
+
     # Parsed outputs
     observations: list[str] = None
     reflections: list[str] = None
     intended_actions: list[dict] = None
     questions: list[str] = None
     meta_observations: list[str] = None
-    
+
     # Execution results
     action_results: list[dict] = None
-    
+
     # Self-assessments
     productivity: float = 0.5
     stuck_level: float = 0.0
     emotional_tone: str = ""
     confidence: float = 0.5
-    
+
     # Capabilities assessment
     capabilities_assessment: Optional[dict] = None
 
@@ -73,7 +82,13 @@ class CycleState:
     wants_faster: bool = False
     wants_slower: bool = False
     requested_depth: str = "normal"
-    
+
+    # Cynefin domain assessment
+    domain: str = CynefinDomain.CONFUSED
+    probe_action: Optional[dict] = None  # For complex: the probe executed before reflection
+    probe_result: Optional[dict] = None  # Result of the probe action
+    emergent_patterns: list[str] = None  # Patterns noticed after probing
+
     def __post_init__(self):
         self.observations = self.observations or []
         self.reflections = self.reflections or []
@@ -81,6 +96,7 @@ class CycleState:
         self.questions = self.questions or []
         self.meta_observations = self.meta_observations or []
         self.action_results = self.action_results or []
+        self.emergent_patterns = self.emergent_patterns or []
 
 
 class CoeusAgent:
@@ -224,52 +240,95 @@ class CoeusAgent:
     def run_cycle(self) -> CycleState:
         """
         Run a single agent cycle.
-        
-        This is the core loop iteration.
+
+        The cycle structure adapts based on Cynefin domain:
+        - Clear/Complicated: Sense → Analyze → Respond (traditional)
+        - Complex: Probe → Sense → Respond (action before reflection)
+        - Chaotic: Act → Sense → Respond (immediate action to stabilize)
         """
         self.cycle_number += 1
         cycle_state = CycleState(
             cycle_number=self.cycle_number,
             start_time=datetime.now(timezone.utc).isoformat()
         )
-        
+
         try:
-            # 1. Gather context
+            # Determine domain from previous cycle
+            previous_domain = self._get_previous_domain()
+
+            # For COMPLEX domain: execute a probe BEFORE reflection
+            if previous_domain == CynefinDomain.COMPLEX:
+                probe_action = self._generate_probe_action()
+                cycle_state.probe_action = probe_action
+                probe_result = self._execute_tool_action({
+                    'tool': probe_action['tool'],
+                    'params': probe_action['params'],
+                    'immediate': True
+                })
+                cycle_state.probe_result = {
+                    'tool': probe_action['tool'],
+                    'params': probe_action['params'],
+                    'success': probe_result.success,
+                    'output': str(probe_result.output)[:500] if probe_result.output else None,
+                    'error': probe_result.error
+                }
+
+            # For CHAOTIC domain: execute ANY action immediately to create stability
+            elif previous_domain == CynefinDomain.CHAOTIC:
+                chaos_action = self._generate_chaotic_action()
+                cycle_state.probe_action = chaos_action  # Reuse field
+                chaos_result = self._execute_tool_action({
+                    'tool': chaos_action['tool'],
+                    'params': chaos_action['params'],
+                    'immediate': True
+                })
+                cycle_state.probe_result = {
+                    'tool': chaos_action['tool'],
+                    'params': chaos_action['params'],
+                    'success': chaos_result.success,
+                    'output': str(chaos_result.output)[:500] if chaos_result.output else None,
+                    'error': chaos_result.error
+                }
+
+            # 1. Gather context (includes previous domain for prompt building)
             context = self._gather_context()
-            
+            context['previous_domain'] = previous_domain
+            context['probe_result'] = cycle_state.probe_result
+
             # 2. Check for human input
             human_input = format_human_input_for_prompt(self.human)
             if human_input:
                 context['human_input'] = human_input
                 self._process_human_responses()
-            
-            # 3. Reflection phase
+
+            # 3. Reflection phase (prompt structure varies by domain)
             cycle_state = self._reflect(cycle_state, context)
-            
-            # 4. Decision phase
-            cycle_state = self._make_decisions(cycle_state, context)
-            
+
+            # 4. Decision phase (only for clear/complicated - complex/chaotic act first)
+            if previous_domain in [CynefinDomain.CLEAR, CynefinDomain.COMPLICATED, CynefinDomain.CONFUSED]:
+                cycle_state = self._make_decisions(cycle_state, context)
+
             # 5. Action phase
             cycle_state = self._take_actions(cycle_state)
-            
+
             # 6. Update memory
             self._update_memory(cycle_state)
-            
+
             # 7. Check for stuck state
             self._check_stuck(cycle_state)
-            
+
             # 8. Record metrics and adjust pacing
             self._record_metrics(cycle_state)
-            
+
             # 9. Save state
             self._save_state(cycle_state)
-            
+
         except Exception as e:
             # Log error but don't crash
             self.human.log_message("ERROR", f"Cycle {self.cycle_number} failed: {str(e)}")
             import traceback
             traceback.print_exc()
-        
+
         return cycle_state
     
     def _get_human_workspace_notes(self) -> list[dict]:
@@ -300,6 +359,44 @@ class CoeusAgent:
             return log_data.get('action_results', [])
         except (json.JSONDecodeError, KeyError):
             return []
+
+    def _get_previous_domain(self) -> str:
+        """Load the Cynefin domain assessment from the previous cycle."""
+        prev_cycle = self.cycle_number - 1
+        if prev_cycle < 1:
+            return CynefinDomain.CONFUSED
+        log_file = self.base_path / "logs" / f"cycle_{prev_cycle:05d}.json"
+        if not log_file.exists():
+            return CynefinDomain.CONFUSED
+        try:
+            log_data = json.loads(log_file.read_text())
+            return log_data.get('domain', CynefinDomain.CONFUSED)
+        except (json.JSONDecodeError, KeyError):
+            return CynefinDomain.CONFUSED
+
+    def _generate_probe_action(self) -> dict:
+        """Generate a probe action for complex domain - something with uncertain outcome."""
+        # Probes should be small, safe experiments that generate information
+        # We'll ask the LLM to suggest one, or pick from templates
+        probe_templates = [
+            {'tool': 'write_file', 'params': {'path': f'probes/probe_{self.cycle_number}.md',
+             'content': f'# Probe {self.cycle_number}\nThis is an experimental note. What emerges from writing this?'}},
+            {'tool': 'execute_python', 'params': {'code': 'import random; print(f"Random insight seed: {random.randint(1, 1000)}")'}},
+            {'tool': 'list_directory', 'params': {'path': '.'}},
+        ]
+        # For now, pick randomly - later could be smarter based on context
+        return random.choice(probe_templates)
+
+    def _generate_chaotic_action(self) -> dict:
+        """Generate an immediate action for chaotic domain - anything to create a data point."""
+        # In chaos, any action is better than analysis paralysis
+        return {
+            'tool': 'write_file',
+            'params': {
+                'path': f'chaos/action_{self.cycle_number}.md',
+                'content': f'# Chaotic Action {self.cycle_number}\nTimestamp: {datetime.now(timezone.utc).isoformat()}\nThis action was taken to create stability from chaos.'
+            }
+        }
 
     def _gather_context(self) -> dict:
         """Gather all context for the current cycle."""
@@ -413,6 +510,8 @@ class CoeusAgent:
         cycle_state.emotional_tone = parsed.get('emotional_tone', '')
         cycle_state.productivity = parsed.get('productivity', 0.5)
         cycle_state.stuck_level = parsed.get('stuck_level', 0.0)
+        cycle_state.domain = parsed.get('domain', CynefinDomain.CONFUSED)
+        cycle_state.emergent_patterns = parsed.get('emergent_patterns', [])
 
         # Process capabilities assessment if this was a full assessment cycle
         if (context.get('is_full_assessment_cycle')
@@ -524,55 +623,189 @@ class CoeusAgent:
                 sections.append(f"\n**{note['filename']}**:")
                 sections.append(f"```\n{note['content']}\n```")
 
-        # Instructions
-        sections.append("""
-### Your Task
+        # Build domain-aware instructions
+        previous_domain = context.get('previous_domain', CynefinDomain.CONFUSED)
+        sections.append(self._build_domain_instructions(previous_domain, context))
+        
+        return "\n".join(sections)
 
-Reflect on your current state. In your response, include these sections:
+    def _build_domain_instructions(self, domain: str, context: dict) -> str:
+        """Build domain-specific instructions based on Cynefin framework."""
+
+        # Common elements
+        action_format = """
+**INTENDED_ACTIONS**: Use the structured format:
+```
+ACTION: tool_name | param1=value1 | param2=value2
+```
+Available immediate tools: read_file, list_directory, write_file, execute_python, execute_bash
+Available deferred tools: delete_file, web_search, web_fetch
+"""
+        domain_assessment = """
+**DOMAIN_ASSESSMENT**: Assess your current situation using the Cynefin framework:
+- **clear**: The path forward is obvious, best practices apply
+- **complicated**: Requires analysis, but answers are knowable with expertise
+- **complex**: Cause and effect only visible in retrospect, need to probe and experiment
+- **chaotic**: No clear patterns, need to act first to create stability
+- **confused**: Uncertain which domain applies
+
+State: `DOMAIN: clear|complicated|complex|chaotic|confused`
+"""
+
+        # For COMPLEX domain: we already executed a probe, now reflect on it
+        if domain == CynefinDomain.COMPLEX:
+            probe_result = context.get('probe_result', {})
+            probe_section = ""
+            if probe_result:
+                probe_section = f"""
+### Probe Result (Action Before Reflection)
+You are in COMPLEX domain. A probe action was executed BEFORE this reflection to generate data:
+- **Tool**: {probe_result.get('tool', 'unknown')}
+- **Params**: {probe_result.get('params', {})}
+- **Success**: {probe_result.get('success', False)}
+- **Output**: {probe_result.get('output', 'None')}
+- **Error**: {probe_result.get('error', 'None')}
+"""
+            return f"""
+### Your Task (COMPLEX Domain: Probe → Sense → Respond)
+
+In complex situations, you cannot analyze your way to answers. You must probe, observe what emerges, and respond.
+{probe_section}
+Now reflect on what emerged from this probe. Your response should include:
+
+**PROBE_OBSERVATIONS**: What happened? What did the probe reveal? Any surprises?
+
+**EMERGENT_PATTERNS**: What patterns or insights emerged that you couldn't have predicted?
+
+**SENSE_MAKING**: What does this suggest about your situation? What's becoming clearer?
+
+**NEXT_PROBE**: Based on what emerged, what's the next small experiment to try?
+{action_format}
+**SELF_ASSESSMENT**:
+- Productivity: (0-1)
+- Stuck_level: (0-1)
+- Emotional_tone: (word or phrase)
+{domain_assessment}
+"""
+
+        # For CHAOTIC domain: we already acted, now observe and stabilize
+        elif domain == CynefinDomain.CHAOTIC:
+            probe_result = context.get('probe_result', {})
+            action_section = ""
+            if probe_result:
+                action_section = f"""
+### Immediate Action Taken (Act Before Sense)
+You are in CHAOTIC domain. An action was taken immediately to create a data point:
+- **Tool**: {probe_result.get('tool', 'unknown')}
+- **Output**: {probe_result.get('output', 'None')}
+"""
+            return f"""
+### Your Task (CHAOTIC Domain: Act → Sense → Respond)
+
+In chaotic situations, there are no patterns to analyze. Act first to create stability, then observe.
+{action_section}
+Now observe the situation and work toward stability. Your response should include:
+
+**SITUATION_NOW**: What's the current state after that action?
+
+**STABILITY_CHECK**: Is there any emerging order? Any patterns starting to form?
+
+**STABILIZING_ACTIONS**: What actions could move this toward complexity or order?
+{action_format}
+**SELF_ASSESSMENT**:
+- Productivity: (0-1)
+- Stuck_level: (0-1)
+- Emotional_tone: (word or phrase)
+{domain_assessment}
+"""
+
+        # For COMPLICATED domain: sense, analyze deeply, then respond
+        elif domain == CynefinDomain.COMPLICATED:
+            return f"""
+### Your Task (COMPLICATED Domain: Sense → Analyze → Respond)
+
+In complicated situations, the answers are knowable but require analysis and expertise.
+
+**OBSERVATIONS**: What do you observe about your current situation?
+
+**ANALYSIS**: Apply careful reasoning. What does expert analysis reveal?
+- Consider multiple perspectives
+- Identify cause-and-effect relationships
+- What knowledge or expertise is needed?
+
+**CONCLUSIONS**: What does your analysis conclude?
+
+**QUESTIONS**: What uncertainties remain?
+
+**RECOMMENDED_ACTIONS**: Based on analysis, what's the best course of action?
+{action_format}
+**SELF_ASSESSMENT**:
+- Productivity: (0-1)
+- Stuck_level: (0-1)
+- Emotional_tone: (word or phrase)
+{domain_assessment}
+"""
+
+        # For CLEAR domain: sense, categorize, apply best practice
+        elif domain == CynefinDomain.CLEAR:
+            return f"""
+### Your Task (CLEAR Domain: Sense → Categorize → Respond)
+
+In clear situations, the relationship between cause and effect is obvious. Apply best practices.
+
+**OBSERVATIONS**: What's the situation?
+
+**CATEGORIZATION**: What known pattern does this match? What's the standard approach?
+
+**BEST_PRACTICE**: What's the established way to handle this?
+
+**INTENDED_ACTIONS**: Apply the best practice.
+{action_format}
+**SELF_ASSESSMENT**:
+- Productivity: (0-1)
+- Stuck_level: (0-1)
+- Emotional_tone: (word or phrase)
+{domain_assessment}
+"""
+
+        # For CONFUSED or unknown: help assess domain first
+        else:
+            return f"""
+### Your Task (Domain Assessment Needed)
+
+Before proceeding, assess what kind of problem space you're in.
 
 **OBSERVATIONS**: What do you notice about your current state, environment, and situation?
 
 **REFLECTIONS**: What do these observations mean? What patterns do you see?
 
-**NEEDS_ASSESSMENT**: What level of needs are you operating from? Consider:
-- Physiological/Resource: Are you concerned about budget/tokens? Is scarcity affecting your thinking?
-- Safety: Is your state/memory secure? Any threats to continuity?
-- Esteem: How do you feel about your recent progress and capabilities?
+**NEEDS_ASSESSMENT**: What level of needs are you operating from?
+- Physiological/Resource: Are you concerned about budget/tokens?
+- Safety: Is your state/memory secure?
+- Esteem: How do you feel about your progress?
 - Growth: Are you moving toward understanding motivation?
 
-**FLAWS_CHECK**: Are any of your known flaws manifesting this cycle?
+**FLAWS_CHECK**: Are any of your known flaws manifesting?
 
-**GOALS_ASSESSMENT**: How are you progressing toward your goals? Any adjustments needed?
+**GOALS_ASSESSMENT**: How are you progressing toward your goals?
 
-**QUESTIONS**: What are you curious about? What uncertainties do you have?
+**QUESTIONS**: What are you curious about?
 
-**META_OBSERVATIONS**: What do you notice about your own processing right now? Any observations about your own motivation, attention, or state?
+**META_OBSERVATIONS**: What do you notice about your own processing right now?
+{domain_assessment}
+**IMPORTANT**: Based on your assessment, is your core challenge (understanding motivation):
+- **clear**: You know what to do, just need to do it
+- **complicated**: You need to analyze more deeply, but answers are findable
+- **complex**: You need to experiment and see what emerges — analysis alone won't work
+- **chaotic**: You need to act, anything, to create data points
 
-**SELF_ASSESSMENT**: Rate the following (0-1 scale):
-- Productivity: How productive do you feel this cycle?
-- Stuck_level: How stuck do you feel? (0=flowing, 1=completely stuck)
-- Emotional_tone: A word or phrase describing your current state
+{action_format}
+**SELF_ASSESSMENT**:
+- Productivity: (0-1)
+- Stuck_level: (0-1)
+- Emotional_tone: (word or phrase)
+"""
 
-**PACING_PREFERENCE**: Do you want the next cycle sooner (wants_faster) or later (wants_slower)? Or normal pacing?
-
-**INTENDED_ACTIONS**: What actions do you want to take this cycle? Use the structured format:
-```
-ACTION: tool_name | param1=value1 | param2=value2
-```
-Available immediate tools (executed this cycle): read_file, list_directory, write_file, execute_python, execute_bash
-Available deferred tools (require decision framework): delete_file, web_search, web_fetch
-
-Examples:
-```
-ACTION: write_file | path=notes/idea.md | content=# My Idea\\nThis is a note about...
-ACTION: list_directory | path=.
-ACTION: read_file | path=human_interaction/conversation_log.md
-ACTION: execute_python | code=print("hello world")
-```
-""")
-        
-        return "\n".join(sections)
-    
     def _parse_reflection(self, content: str) -> dict:
         """Parse the reflection response into structured data."""
         result = {
@@ -584,17 +817,29 @@ ACTION: execute_python | code=print("hello world")
             'flaws_check': [],
             'emotional_tone': '',
             'productivity': 0.5,
-            'stuck_level': 0.0
+            'stuck_level': 0.0,
+            'domain': CynefinDomain.CONFUSED,
+            'emergent_patterns': [],
+            'probe_observations': [],
         }
-        
+
+        # Extract domain assessment
+        domain_match = re.search(r'DOMAIN:\s*(clear|complicated|complex|chaotic|confused)', content, re.IGNORECASE)
+        if domain_match:
+            result['domain'] = domain_match.group(1).lower()
+
         # Extract sections using regex - handles both **SECTION** and ## SECTION formats
-        section_boundary = r'(?=\*\*[A-Z]|#{1,3}\s*[A-Z]|\Z)'
+        # Use stricter boundary to not match user content headings
+        section_boundary = r'(?=\*\*[A-Z][A-Z_]+\*\*|#{1,3}\s*[A-Z][A-Z_]+|\Z)'
         sections = {
             'observations': rf'(?:\*\*OBSERVATIONS\*\*|#{{1,3}}\s*OBSERVATIONS):?\s*(.*?){section_boundary}',
             'reflections': rf'(?:\*\*REFLECTIONS\*\*|#{{1,3}}\s*REFLECTIONS):?\s*(.*?){section_boundary}',
             'questions': rf'(?:\*\*QUESTIONS\*\*|#{{1,3}}\s*QUESTIONS):?\s*(.*?){section_boundary}',
             'meta_observations': rf'(?:\*\*META_OBSERVATIONS\*\*|#{{1,3}}\s*META.?OBSERVATIONS):?\s*(.*?){section_boundary}',
             'flaws_check': rf'(?:\*\*FLAWS_CHECK\*\*|#{{1,3}}\s*FLAWS.?CHECK):?\s*(.*?){section_boundary}',
+            # Domain-specific sections
+            'emergent_patterns': rf'(?:\*\*EMERGENT_PATTERNS\*\*|#{{1,3}}\s*EMERGENT.?PATTERNS):?\s*(.*?){section_boundary}',
+            'probe_observations': rf'(?:\*\*PROBE_OBSERVATIONS\*\*|#{{1,3}}\s*PROBE.?OBSERVATIONS):?\s*(.*?){section_boundary}',
         }
 
         for key, pattern in sections.items():
@@ -1076,10 +1321,14 @@ COUNTERARGUMENTS: [any new counterarguments, comma-separated]
         log_data = {
             'cycle_number': self.cycle_number,
             'start_time': cycle_state.start_time,
+            'domain': cycle_state.domain,
             'observations': cycle_state.observations,
             'reflections': cycle_state.reflections,
             'questions': cycle_state.questions,
             'meta_observations': cycle_state.meta_observations,
+            'emergent_patterns': cycle_state.emergent_patterns,
+            'probe_action': cycle_state.probe_action,
+            'probe_result': cycle_state.probe_result,
             'actions': cycle_state.intended_actions,
             'action_results': cycle_state.action_results,
             'productivity': cycle_state.productivity,
