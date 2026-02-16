@@ -26,6 +26,8 @@ class NodeType(Enum):
     QUESTION = "Question"
     PERTURBATION = "Perturbation"  # When stuck, random changes made
     CAPABILITY_ASSESSMENT = "CapabilityAssessment"
+    GADFLY_CHALLENGE = "GadflyChallenge"
+    FEEDBACK = "Feedback"
 
 
 class EdgeType(Enum):

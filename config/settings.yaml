@@ -156,6 +156,26 @@ immediate_actions:
     - web_search
     - web_fetch
 
+# Environmental feedback (zero-cost external metrics)
+feedback:
+  enabled: true
+  novelty_window: 20         # Compare against last N cycles
+  stagnation_window: 10      # Check last N cycles for stagnation
+  hypothesis_auto_evaluate: true
+
+# Gadfly agent (independent challenger)
+gadfly:
+  enabled: true
+  model: "claude-haiku-4-5-20251001"
+  max_tokens: 1024
+  temperature: 1.0
+  cycles_between_challenges: 5   # One gadfly cycle per N Coeus cycles
+  coeus_cycles_to_read: 3        # Read last N Coeus cycle logs
+  max_cost_per_cycle: 0.005      # Hard cap per gadfly cycle in USD
+  max_total_budget: 1.00         # Never spend more than this total
+  pid_file: "gadfly.pid"
+  min_interval_seconds: 300      # At least 5 minutes between cycles
+
 # Logging
 logging:
   level: "INFO"

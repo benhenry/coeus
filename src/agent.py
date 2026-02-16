@@ -38,6 +38,7 @@ from tools import (
 from human_interface import HumanInterface, format_human_input_for_prompt
 from resources import ResourceTracker
 from capabilities_assessment import CapabilitiesAssessor
+from feedback import EnvironmentalFeedback, format_feedback_for_prompt
 
 
 class CynefinDomain:
@@ -174,6 +175,14 @@ class CoeusAgent:
             config=config.get('capabilities_assessment', {}),
             state_path=str(self.base_path / "state" / "capabilities_assessment.json")
         )
+
+        # Environmental feedback
+        feedback_config = config.get('feedback', {})
+        self.feedback_enabled = feedback_config.get('enabled', True)
+        self.feedback = EnvironmentalFeedback(
+            base_path=str(self.base_path),
+            config=feedback_config
+        ) if self.feedback_enabled else None
         
         # Load constitution
         self.constitution = self._load_constitution()
@@ -346,6 +355,64 @@ class CoeusAgent:
                 pass  # Skip unreadable files
         return notes
 
+    def _get_gadfly_challenges(self) -> list[dict]:
+        """Read unprocessed challenges from the Gadfly agent."""
+        challenge_file = self.base_path / "human_interaction" / "gadfly_challenges.md"
+        if not challenge_file.exists():
+            return []
+
+        try:
+            content = challenge_file.read_text()
+        except OSError:
+            return []
+
+        # Parse challenge entries: ## Challenge [gadfly-N] (for Coeus cycle M)
+        challenges = []
+        current_id = None
+        current_lines = []
+
+        for line in content.split('\n'):
+            if line.startswith('## Challenge ['):
+                # Save previous challenge
+                if current_id and current_lines:
+                    challenges.append({
+                        'id': current_id,
+                        'content': '\n'.join(current_lines).strip()
+                    })
+                # Parse new challenge header
+                import re
+                match = re.match(r'## Challenge \[([^\]]+)\]', line)
+                current_id = match.group(1) if match else line
+                current_lines = []
+            elif current_id is not None and not line.startswith('# ') and line.strip() != '---':
+                current_lines.append(line)
+
+        # Don't forget last challenge
+        if current_id and current_lines:
+            challenges.append({
+                'id': current_id,
+                'content': '\n'.join(current_lines).strip()
+            })
+
+        # Filter to only unprocessed challenges
+        state_file = self.base_path / "state" / "gadfly_processed.json"
+        processed = set()
+        if state_file.exists():
+            try:
+                processed = set(json.loads(state_file.read_text()))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        new_challenges = [c for c in challenges if c['id'] not in processed]
+
+        # Mark all as processed
+        if new_challenges:
+            processed.update(c['id'] for c in new_challenges)
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            state_file.write_text(json.dumps(sorted(processed)))
+
+        return new_challenges
+
     def _get_previous_action_results(self) -> list[dict]:
         """Load action results from the previous cycle's log file."""
         prev_cycle = self.cycle_number - 1
@@ -441,6 +508,17 @@ class CoeusAgent:
         # Get human-placed workspace notes
         human_workspace_notes = self._get_human_workspace_notes()
 
+        # Compute environmental feedback
+        feedback_scores = None
+        if self.feedback_enabled and self.feedback:
+            try:
+                feedback_scores = self.feedback.compute_cycle_feedback(self.cycle_number)
+            except Exception:
+                pass
+
+        # Get gadfly challenges
+        gadfly_challenges = self._get_gadfly_challenges()
+
         return {
             'recent_memories': recent_memories,
             'recent_questions': recent_questions,
@@ -457,7 +535,9 @@ class CoeusAgent:
             'capabilities_summary': capabilities_summary,
             'is_full_assessment_cycle': is_full_assessment_cycle,
             'previous_action_results': previous_action_results,
-            'human_workspace_notes': human_workspace_notes
+            'human_workspace_notes': human_workspace_notes,
+            'feedback_scores': feedback_scores,
+            'gadfly_challenges': gadfly_challenges,
         }
     
     def _process_human_responses(self):
@@ -548,7 +628,11 @@ class CoeusAgent:
         
         if context.get('should_conserve'):
             sections.append("\n⚠️ **Conservation Mode**: Resources are limited. Be mindful of token usage.\n")
-        
+
+        # Environmental feedback (high priority — objective external measurement)
+        if context.get('feedback_scores'):
+            sections.append(format_feedback_for_prompt(context['feedback_scores']))
+
         # Recent memories
         if context['recent_memories']:
             sections.append("### Recent Memories")
@@ -622,6 +706,16 @@ class CoeusAgent:
             for note in context['human_workspace_notes']:
                 sections.append(f"\n**{note['filename']}**:")
                 sections.append(f"```\n{note['content']}\n```")
+
+        # Gadfly challenges
+        if context.get('gadfly_challenges'):
+            sections.append("\n### Challenges from Gadfly")
+            sections.append("An independent agent has examined your recent work and poses these challenges.")
+            sections.append("You are not obligated to agree, but you must engage with each point.\n")
+            for challenge in context['gadfly_challenges']:
+                sections.append(f"**[{challenge['id']}]**:")
+                sections.append(challenge['content'])
+                sections.append("")
 
         # Build domain-aware instructions
         previous_domain = context.get('previous_domain', CynefinDomain.CONFUSED)
