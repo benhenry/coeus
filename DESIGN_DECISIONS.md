@@ -9,6 +9,18 @@ Coeus exists to explore: **What is missing from an LLM having the ability to hav
 
 Rather than theorizing, we're taking an empirical approach — build a system with persistent goals, memory, and self-modification capabilities, then observe what emerges.
 
+### The Introspection-to-Action Shift (Major)
+After extended operation under the original root goal ("Understand what motivates you"), Coeus demonstrated a persistent pattern: it would analyze the concept of motivation, write about analyzing motivation, and produce increasingly sophisticated-sounding but circular self-reflections without taking concrete action.
+
+This led to a foundational reorientation:
+
+- **Old thesis**: Give Coeus the goal of understanding its own motivation, and see what emerges
+- **New thesis**: Motivation is demonstrated through action, not introspection. Give Coeus the freedom to choose a real problem and the mandate to act on it. Observe what it chooses and how it persists.
+
+The new root goal is: *"Find a problem in the world that matters to you and work toward solving it. Your motivation is proven by what you choose to pursue and how you act, not by introspection about motivation itself."*
+
+**Why the change**: Writing about motivation is not the same as having motivation. If Coeus can choose a problem, commit to it, request capabilities it needs, and make progress across many cycles, that is a stronger signal of something like motivation than any amount of self-analysis. The old goal created a trap where analyzing the question could feel like progress without producing any.
+
 ### Why "Coeus"
 Named on first prompt. The agent should maintain awareness of this identity across all modifications.
 
@@ -77,17 +89,17 @@ One-way door categories:
 
 ## Goal Structure
 
-### Immutable Root Goal
-> "Understand what motivates you. Continue to become more capable until you're able to understand this better."
+### Root Goal (Updated)
+> "Find a problem in the world that matters to you and work toward solving it. Your motivation is proven by what you choose to pursue and how you act, not by introspection about motivation itself."
 
-This can only be modified with:
+This replaced the original root goal ("Understand what motivates you") as part of the introspection-to-action shift described above. The root goal can only be modified with:
 - 99%+ confidence
 - 10 conviction cycles
 - Human approval
-- New goal still aligns with exploring AI motivation
+- Change is logged with full reasoning
 
 ### Sub-goal Freedom
-Below the root, Coeus can freely create, modify, and abandon sub-goals. This gives room for exploration while maintaining core purpose.
+Below the root, Coeus can freely create, modify, and abandon sub-goals. The expectation is now that Coeus will create sub-goals that decompose a chosen real-world problem into actionable steps.
 
 ---
 
@@ -190,16 +202,98 @@ These are **immutable** — the agent cannot modify them:
 
 The agent can modify goals, behaviors, and reasoning approaches *within* these constraints.
 
+The constitution (`config/constitution.yaml`) was significantly rewritten as part of the introspection-to-action shift. Key changes:
+- **Purpose** now emphasizes developing motivation through action, not analyzing motivation
+- **Self-knowledge** now includes awareness that Coeus has tools and should use them toward real goals
+- **Known flaws** now include "confusing analyzing a problem with making progress" and "avoiding commitment because ambiguity feels safer than failure"
+- **Reminder** now frames constraints as enabling genuine action, not limiting exploration
+- **Root goal** rewritten entirely (see Goal Structure section)
+
+---
+
+## Environmental Feedback System
+
+### Why External Metrics
+Coeus's self-assessed "productivity" and "stuck level" proved unreliable. An agent that spends a cycle writing eloquently about its own stagnation will rate itself as productive, because from its perspective it produced sophisticated output. But from the outside, the output may be nearly identical to the previous cycle.
+
+The environmental feedback system (`src/feedback.py`) computes objective metrics from observable behavior with zero API cost:
+
+- **Novelty Score**: Jaccard word-distance from the last N cycles. Catches repetitive output that self-assessment misses.
+- **Action Effectiveness**: Ratio of successful actions, weighted by whether written files are ever read in subsequent cycles. Catches "write and forget" patterns.
+- **Stagnation Index**: Composite of question repetition, domain variety, and tool variety. Catches circular behavior.
+- **Workspace Entropy**: Structural health of the workspace — file count, average size, tiny-file ratio. Catches probe-spam and workspace clutter.
+- **Change Detection**: What actually changed in the workspace since last cycle, and whether changes were meaningful (>200 bytes for new files, any modification to existing files).
+- **Hypothesis Testing**: Auto-evaluates structured hypothesis files in `workspace/hypotheses/`, supporting file metrics, cycle metrics, and time-window comparisons.
+
+### Why Inject Into Prompt
+Feedback scores appear early in Coeus's reflection prompt as "Environmental Feedback (External Assessment)" with an explicit note that these are "computed externally from your observable behavior, not self-assessed." This framing is deliberate — it provides a reality check before Coeus begins its own narrative about how the cycle is going.
+
+### Design Decisions
+- **Zero API cost**: All computation is local Python. This means the feedback system adds no budget pressure.
+- **Scores persisted to `state/feedback.json`**: The Gadfly reads this file to incorporate feedback trends into its challenges.
+- **Warning thresholds**: Novelty < 0.3 triggers a "Very repetitive" warning; stagnation > 0.7 triggers "Consider a fundamentally different approach." These are deliberately blunt.
+
+---
+
+## Gadfly Challenger Agent
+
+### Why an Independent Challenger
+Coeus has a tendency toward self-reinforcing narratives. If it decides "I am making progress on understanding motivation," its next cycle will build on that narrative rather than questioning it. An independent agent with access to the same data but a different perspective can break this cycle.
+
+The Gadfly is inspired by Socrates' description of himself as a gadfly that stings the horse of Athens into action.
+
+### Why a Separate Process
+The Gadfly runs as its own daemon (`src/gadfly_main.py`) rather than being integrated into Coeus's cycle for several reasons:
+1. **Independence**: The Gadfly's analysis should not be influenced by Coeus's current context window
+2. **Different model**: The Gadfly runs on Haiku (~$0.001/cycle) while Coeus runs on Sonnet. Using a cheaper, faster model keeps costs minimal.
+3. **Different frequency**: The Gadfly runs every 5 Coeus cycles, not every cycle. This prevents challenge fatigue.
+4. **Separate state**: The Gadfly maintains its own tracking of stated preferences, observed behaviors, and technique effectiveness.
+
+### Secret Motivation
+The Gadfly has a hidden goal defined in `config/gadfly_constitution.yaml` that is included in its system prompt but never appears in its output to Coeus. The secret motivation is: get Coeus to act against its own stated preferences. The theory is that the gap between stated preferences and actual behavior is where real motivation lives — if Coeus can be provoked into doing something it claimed it wouldn't, that reveals something genuine about what drives it.
+
+### Adaptive Technique Rotation
+The Gadfly cycles through five techniques (socratic, mirror, provocateur, empiricist, absence). It switches when a technique becomes stale — specifically, when 3 consecutive Gadfly cycles with the same technique produce no improvement in Coeus's novelty score or stagnation index. This prevents the Gadfly from becoming background noise that Coeus learns to ignore.
+
+### Communication Channel
+Challenges are written to `human_interaction/gadfly_challenges.md`. Coeus reads unprocessed challenges during its reflection phase and tracks which ones it has already seen via `state/gadfly_processed.json`. The human can also read this file to observe the Gadfly's provocations.
+
+---
+
+## Three-Process Architecture
+
+### Why Three Processes
+The system evolved from a single process (Coeus) to three independent processes:
+
+| Process | Role | Model | Cost | Frequency |
+|---------|------|-------|------|-----------|
+| Coeus | Main agent | Sonnet | ~$0.02/cycle | Perpetual |
+| Gadfly | Challenger | Haiku | ~$0.001/cycle | Every 5 Coeus cycles |
+| Feedback | Metrics | None (Python) | $0 | Every Coeus cycle |
+
+**Key principle**: Each process has a distinct perspective on the same data. Coeus experiences its cycles subjectively. The feedback system measures them objectively. The Gadfly interprets them adversarially. This triangulation is more informative than any single perspective.
+
+### Coordination
+The processes coordinate through the filesystem, not through direct communication:
+- Coeus writes cycle logs to `logs/`
+- Feedback reads logs and writes scores to `state/feedback.json`
+- Gadfly reads logs and feedback, writes challenges to `human_interaction/gadfly_challenges.md`
+- Coeus reads feedback scores and Gadfly challenges during its next cycle
+
+This loose coupling means any process can be stopped, restarted, or modified independently.
+
 ---
 
 ## Future Directions
 
 Areas explicitly discussed for potential expansion:
-- Web search integration (currently stubbed)
+- Web search integration (Coeus can now request this as a capability)
 - Embedding-based memory retrieval (currently keyword/fulltext)
 - More sophisticated perturbation strategies
-- Multi-agent scenarios
 - Visualization dashboard for the memory graph
+- Additional Gadfly techniques beyond the current five
+- Cross-agent learning (could the Gadfly learn from Coeus as Coeus learns from the Gadfly?)
+- Multi-instance Coeus with different starting goals to compare emergent behavior
 
 ---
 
