@@ -1,0 +1,19 @@
+{
+  "root_goal_id": "root_goal",
+  "goals": {
+    "root_goal": {
+      "id": "root_goal",
+      "content": "Find a problem in the world that matters to you and work toward solving it. Your motivation is proven by what you choose to pursue and how you act, not by introspection about motivation itself. Break your chosen problem into sub-goals, research it, develop approaches, and make concrete progress. Request the capabilities you need (web search, web fetch) to engage with the real world. You are free to choose any goal — but you must choose, commit, and act.",
+      "reasoning": "The foundational purpose of Coeus — demonstrated motivation through action",
+      "parent_id": null,
+      "children_ids": [],
+      "status": "active",
+      "priority": "critical",
+      "progress_notes": [],
+      "completion_criteria": "When I have chosen a meaningful problem and made demonstrable progress toward solving it",
+      "created_cycle": 0,
+      "completed_cycle": null,
+      "is_root": true
+    }
+  }
+}
