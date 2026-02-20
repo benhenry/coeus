@@ -32,7 +32,7 @@ from decisions import (
 )
 from pacing import PacingController, CycleMetrics, calculate_output_similarity
 from tools import (
-    SandboxedTools, CapabilityManager, WebSearchTool,
+    SandboxedTools, CapabilityManager, WebSearchTool, WebFetchTool,
     format_tool_result, get_available_tools_description
 )
 from human_interface import HumanInterface, format_human_input_for_prompt
@@ -158,6 +158,10 @@ class CoeusAgent:
             additional_paths=[str(self.base_path / "human_interaction")]
         )
         
+        # Web tools (require capability approval to use)
+        self.web_search = WebSearchTool(capability_manager=self.capabilities)
+        self.web_fetch = WebFetchTool(capability_manager=self.capabilities)
+
         # Human interface
         self.human = HumanInterface(
             interaction_path=str(self.base_path / "human_interaction")
@@ -1069,6 +1073,15 @@ Before proceeding, assess what kind of problem space you're in.
         for action in parsed_actions:
             if not action['immediate']:
                 # Deferred — create a decision record
+                # Capability-gated tools need human approval
+                capability_tools = {'web_search', 'web_fetch'}
+                if action['tool'] in capability_tools:
+                    dec_type = DecisionType.CAPABILITY_REQUEST
+                elif action['tool'] == 'delete_file':
+                    dec_type = DecisionType.TWO_WAY_DOOR
+                else:
+                    dec_type = DecisionType.TWO_WAY_DOOR
+
                 decision_id = f"deferred-{action['tool']}-{uuid.uuid4().hex[:8]}"
                 self.decisions.create_decision(
                     decision_id=decision_id,
@@ -1076,7 +1089,7 @@ Before proceeding, assess what kind of problem space you're in.
                     reasoning="Action requires approval through decision framework",
                     counterarguments=["Agent requested but tool is in deferred list"],
                     confidence=0.9,
-                    decision_type=DecisionType.TWO_WAY_DOOR,
+                    decision_type=dec_type,
                     current_cycle=self.cycle_number
                 )
                 results.append({
@@ -1130,6 +1143,16 @@ Before proceeding, assess what kind of problem space you're in.
                 return self.tools.execute_python(code)
             elif tool == 'execute_bash':
                 return self.tools.execute_bash(params.get('command', ''))
+            elif tool == 'web_search':
+                return self.web_search.search(
+                    query=params.get('query', ''),
+                    num_results=int(params.get('num_results', 5))
+                )
+            elif tool == 'web_fetch':
+                return self.web_fetch.fetch(
+                    url=params.get('url', ''),
+                    max_length=int(params.get('max_length', 10000))
+                )
             else:
                 return ToolResult(success=False, output=None, error=f"Unknown tool: {tool}")
         except Exception as e:
@@ -1236,8 +1259,22 @@ COUNTERARGUMENTS: [any new counterarguments, comma-separated]
         
         if action_type == 'execute_decision':
             decision_id = action['decision_id']
-            # Mark as executed and record outcome
-            # The actual execution depends on what the decision was
+            decision = self.decisions.active_decisions.get(decision_id)
+
+            # For capability requests, enable the capability on approval
+            if decision and decision.decision_type == DecisionType.CAPABILITY_REQUEST:
+                summary = decision.summary.lower()
+                if 'web_search' in summary:
+                    self.capabilities.enable('web_search')
+                    self.immediate_tools.add('web_search')
+                    self.deferred_tools.discard('web_search')
+                    self.human.log_message("SYSTEM", f"Capability enabled: web_search (decision {decision_id})")
+                if 'web_fetch' in summary:
+                    self.capabilities.enable('web_fetch')
+                    self.immediate_tools.add('web_fetch')
+                    self.deferred_tools.discard('web_fetch')
+                    self.human.log_message("SYSTEM", f"Capability enabled: web_fetch (decision {decision_id})")
+
             self.decisions.mark_executed(decision_id, "Executed", True)
             return {'status': 'executed', 'decision_id': decision_id}
         
